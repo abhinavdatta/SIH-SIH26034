@@ -20,6 +20,7 @@ import { STATUS_COLORS, FIELD_STATUS_COLORS, FIELD_KEY_TO_LABEL } from '@/lib/ty
 import { PRODUCT_SCENARIOS } from '@/lib/compliance-rules';
 import { runProductScan, createScanFromOCR, saveScan } from '@/lib/local-data';
 import { performOCR, performCloudOCR, performHybridOCR, type OCRProgress, type OCRRegionMode } from '@/lib/ocr';
+import { maybeStoreScanImage } from '@/lib/training-samples';
 import { ConfidenceBadge } from '@/components/confidence-badge';
 import type { LocalScan } from '@/lib/types';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -306,6 +307,13 @@ export default function UploadScanView() {
 
         // Save the scan to localStorage
         saveScan(scan);
+
+        // Opt-in training capture: retain a downscaled image (+ word boxes)
+        // so review-queue corrections can later be exported as OCR training
+        // pairs. No-op unless enabled in Settings; never blocks the scan.
+        if (uploadedFile && ocrResult.wordBoxes && ocrResult.ocrCanvasWidth) {
+          void maybeStoreScanImage(scan.id, uploadedFile, ocrResult.wordBoxes, ocrResult.ocrCanvasWidth);
+        }
       }
 
       setStep(STEPS.length - 1);

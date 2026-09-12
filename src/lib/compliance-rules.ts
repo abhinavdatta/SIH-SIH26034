@@ -78,8 +78,36 @@ const RULES: RuleCheck[] = [
     fieldName: 'other_declarations',
     label: 'Other Declarations',
     ruleReference: 'Rule 6(1)(f)',
-    check: () => 'compliant',
-    notes: () => null,
+    // Rule 6(1)(f) requires "such other declarations as may be prescribed"
+    // — in practice FSSAI license numbers (food), batch/lot numbers, and
+    // importer/marketer/packer declarations. Content that doesn't match any
+    // recognizable declaration form goes to needs_review rather than
+    // non_compliant: it may well be a valid declaration this check can't
+    // classify, and a human should judge it instead of silently passing it.
+    check: (v) => {
+      if (!v || v.trim().length === 0) return 'missing';
+      const l = v.toLowerCase();
+      if (
+        /fssai/.test(l) ||
+        /licen[cs]e|lic\.?\s*no/.test(l) ||
+        /\bbatch\b|\blot\b/.test(l) ||
+        /imported|marketed|packed by|manufactured by/.test(l) ||
+        /\d{6,}/.test(v) // long numeric codes (e.g. 14-digit FSSAI numbers)
+      ) return 'compliant';
+      return 'needs_review';
+    },
+    notes: (v) => {
+      if (!v) return 'Other declarations missing — mandatory under Rule 6(1)(f)';
+      const l = v.toLowerCase();
+      if (
+        /fssai/.test(l) ||
+        /licen[cs]e|lic\.?\s*no/.test(l) ||
+        /\bbatch\b|\blot\b/.test(l) ||
+        /imported|marketed|packed by|manufactured by/.test(l) ||
+        /\d{6,}/.test(v)
+      ) return null;
+      return 'Declaration content not recognized — verify it includes the applicable details (e.g. FSSAI license number, batch/lot no.)';
+    },
     severity: 'LOW',
   },
   /* ── EU CLP Regulation (EC) No 1272/2008 - Advisory Hazard Rules ── */

@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import Tesseract from 'tesseract.js';
+import { isLiteMode } from './lite-mode';
 
 /* ── Custom trained model (fine-tuned via training/) ── */
 
@@ -126,6 +127,85 @@ async function runTesseractOnCanvas(
   }
 }
 
+/* ── Character Whitelisting for Structured Fields (Part B) ──
+ *
+ * Fields whose content is known to be numeric/structured (MRP, net
+ * quantity, manufacture date) get a SECOND, targeted recognition pass on
+ * just the cropped keyword+value region with Tesseract's character set
+ * restricted. This meaningfully reduces misreads (a smudged "8" read as
+ * "B", stray symbols picked up). Free-text fields (manufacturer
+ * name/address, consumer care) must NEVER be whitelisted — restricting
+ * the charset there cuts off legitimate text.
+ */
+
+/** Allowed characters per structured field (Tesseract whitelist syntax). */
+const FIELD_CHAR_WHITELISTS: Record<string, string> = {
+  // Digits, decimal point, ₹ (U+20B9), Rs prefix letters, /- separators, space
+  mrp: '0123456789.₹Rs/- ',
+  // Digits, decimal point, unit letters (mg g kg ml l L), space
+  net_quantity: '0123456789.gkmlL ',
+  // Digits, date separators (/-.) + letters used by month abbreviations
+  // (jan..dec) and capitalized forms (Jan, Best Before, MFG, OCT...).
+  manufacture_date:
+    '0123456789/-.abcdefgjlmnoprstuvy'
+    + 'JFMAPYULGSONDBCERT',
+};
+
+/**
+ * Run a targeted recognition pass on a cropped region with a restricted
+ * character set. Uses the shared worker; the whitelist and PSM are reset
+ * afterwards so the restriction cannot leak into other recognitions.
+ */
+async function runWhitelistedRegionPass(
+  canvas: HTMLCanvasElement,
+  crop: { x0: number; y0: number; x1: number; y1: number },
+  whitelist: string
+): Promise<{ text: string; confidence: number } | null> {
+  try {
+    const x0 = Math.max(0, Math.floor(crop.x0));
+    const y0 = Math.max(0, Math.floor(crop.y0));
+    const x1 = Math.min(canvas.width, Math.ceil(crop.x1));
+    const y1 = Math.min(canvas.height, Math.ceil(crop.y1));
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w < 8 || h < 8) return null;
+
+    // Crop + upscale small regions (2x) for more reliable single-line reads
+    const region = document.createElement('canvas');
+    const scale = h < 40 ? 2 : 1;
+    region.width = w * scale;
+    region.height = h * scale;
+    const rctx = region.getContext('2d');
+    if (!rctx) return null;
+    rctx.imageSmoothingEnabled = true;
+    rctx.imageSmoothingQuality = 'high';
+    // Lite Mode: skip the 2× upscale (2×-scaled drawImage costs ~4× the
+    // pixel memory of a 1:1 draw) — accuracy tradeoff accepted in lite.
+    const liteScale = isLiteMode() ? 1 : 2;
+    const scale = h < 40 ? liteScale : 1;
+
+    const worker = await ensureTesseractWorker();
+    try {
+      await worker.setParameters({
+        tessedit_char_whitelist: whitelist,
+        tessedit_pageseg_mode: '7' as Tesseract.PSM, // single text line
+      });
+      const { data } = await worker.recognize(region.toDataURL('image/png'));
+      const text = data.text.trim();
+      if (!text) return null;
+      return { text, confidence: data.confidence / 100 };
+    } finally {
+      // RESET so the whitelist never leaks into other recognition passes.
+      await worker.setParameters({
+        tessedit_char_whitelist: '',
+        tessedit_pageseg_mode: '3' as Tesseract.PSM,
+      });
+    }
+  } catch {
+    return null; // refinement is best-effort
+  }
+}
+
 /* ── Types ── */
 
 export interface ExtractedField {
@@ -144,6 +224,14 @@ export interface OCRResult {
   overallConfidence: number;
   extractionMethod?: 'local_spatial' | 'cloud_ai' | 'hybrid'; // Track extraction method
   aiReasoning?: Record<string, string>; // Field reasoning from AI
+  /**
+   * Word-level boxes from the local OCR pass (OCR-canvas pixel space).
+   * Only present on the local/hybrid spatial path; used to crop training
+   * samples when a reviewer later corrects a field (opt-in training capture).
+   */
+  wordBoxes?: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>;
+  /** Width of the OCR canvas the wordBoxes coordinates refer to. */
+  ocrCanvasWidth?: number;
 }
 
 export interface Region {
@@ -1010,6 +1098,10 @@ const SPATIAL_KEYWORDS = {
     'mrp', 'maximum retail price', 'm.r.p.', 'price', 'rate', '₹', 'rs.', 'rupees',
     'कीमत', // Hindi variant
   ],
+  net_quantity: [
+    'net wt', 'net weight', 'net quantity', 'qty',
+    'वजन', // Hindi variant
+  ],
 } as const;
 
 /**
@@ -1020,6 +1112,7 @@ const SPATIAL_VALUE_PATTERNS = {
   manufacturer_address: /([A-Za-z0-9\s,.-]{10,}(?:\s*[A-Z]{2,3}\s*\d{6,7})?)/i,
   manufacture_date: /((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\/\-]?\d{4}|0?[1-9][\/\-]\d{4})/i,
   mrp: /([₹Rs.]?\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)/i,
+  net_quantity: /(\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litre|gram|grams|kilogram|kilograms|millilitre|millilitres))/i,
 } as const;
 
 /**
@@ -1051,7 +1144,7 @@ function isBelow(box1: WordBox, box2: WordBox, maxDistance: number = 50): boolea
 function extractFieldValueSpatially(
   words: WordBox[],
   fieldKey: keyof typeof SPATIAL_KEYWORDS
-): { value: string | null; confidence: number; sourceText: string } | null {
+): { value: string | null; confidence: number; sourceText: string; crop?: { x0: number; y0: number; x1: number; y1: number } } | null {
   const keywords = SPATIAL_KEYWORDS[fieldKey];
   const valuePattern = SPATIAL_VALUE_PATTERNS[fieldKey];
 
@@ -1130,10 +1223,22 @@ function extractFieldValueSpatially(
 
       const confidence = Math.min(0.95, avgWordConfidence + sameLineBoost);
 
+      // Bounding box over the keyword + candidate value words, for the
+      // whitelisted refinement pass on structured fields (Part B).
+      const xs = [keywordBox.bbox.x0, keywordBox.bbox.x1, ...candidates.map(c => c.bbox.x0), ...candidates.map(c => c.bbox.x1)];
+      const ys = [keywordBox.bbox.y0, keywordBox.bbox.y1, ...candidates.map(c => c.bbox.y0), ...candidates.map(c => c.bbox.y1)];
+      const crop = {
+        x0: Math.min(...xs) - 6,
+        y0: Math.min(...ys) - 4,
+        x1: Math.max(...xs) + 6,
+        y1: Math.max(...ys) + 4,
+      };
+
       return {
         value: valueMatch[1].trim(),
         confidence,
         sourceText: valueMatch[0],
+        crop,
       };
     }
   }
@@ -1142,15 +1247,23 @@ function extractFieldValueSpatially(
 }
 
 /**
- * Extract all high-severity fields using spatial proximity
+ * Extract fields using spatial proximity. Structured fields (mrp,
+ * net_quantity, manufacture_date) carry a crop region for the whitelisted
+ * refinement pass; free-text fields are never cropped/whitelisted.
  */
-function extractFieldsSpatially(words: WordBox[]): ExtractedField[] {
-  const fields: ExtractedField[] = [];
+/** Internal spatial result with the optional crop for refinement (Part B). */
+interface SpatialField extends ExtractedField {
+  _crop?: { x0: number; y0: number; x1: number; y1: number };
+}
+
+function extractFieldsSpatially(words: WordBox[]): SpatialField[] {
+  const fields: SpatialField[] = [];
   const highSeverityFields: Array<keyof typeof SPATIAL_KEYWORDS> = [
     'manufacturer_name',
     'manufacturer_address',
     'manufacture_date',
     'mrp',
+    'net_quantity',
   ];
 
   for (const fieldKey of highSeverityFields) {
@@ -1162,6 +1275,7 @@ function extractFieldsSpatially(words: WordBox[]): ExtractedField[] {
         value: result.value,
         confidence: result.confidence,
         sourceText: result.sourceText,
+        _crop: result.crop,
       });
     }
   }
@@ -1388,7 +1502,9 @@ export async function performOCR(imageFile: File, onProgress?: ProgressCallback,
     onProgress?.({ stage: 'normalizing', progress: 0.05, message: 'Normalizing file format...' });
     const normalizedFile = await normalizeImageFile(imageFile, onProgress);
 
-    // Step 2: Load image and resize
+    // Step 2: Load image and resize (Lite Mode caps the OCR canvas at 900px
+    // to cut peak canvas memory ~4× on low-RAM devices)
+    const OCR_MAX_EDGE = isLiteMode() ? 900 : 2000;
     onProgress?.({ stage: 'loading', progress: 0.15, message: 'Loading image...' });
     const canvas = await new Promise<HTMLCanvasElement>((resolve, reject) => {
       const img = new Image();
@@ -1402,7 +1518,7 @@ export async function performOCR(imageFile: File, onProgress?: ProgressCallback,
 
       img.onload = () => {
         // Set canvas dimensions (resize to reasonable size for OCR)
-        const maxWidth = 2000;
+        const maxWidth = OCR_MAX_EDGE;
         const scale = Math.min(1, maxWidth / img.width);
         canvas.width = img.width * scale;
         canvas.height = img.height * scale;
@@ -1428,6 +1544,13 @@ export async function performOCR(imageFile: File, onProgress?: ProgressCallback,
     let allFields: ExtractedField[] = [];
     let totalConfidence = 0;
     let regionCount = 0;
+
+    /**
+     * Word boxes from the full-image spatial OCR pass (OCR-canvas pixel
+     * space). Populated only on the fallback spatial path; exported in the
+     * result for opt-in training-sample capture.
+     */
+    let spatialWordBoxes: WordBox[] = [];
 
     onProgress?.({
       stage: 'detecting_regions',
@@ -1493,15 +1616,38 @@ export async function performOCR(imageFile: File, onProgress?: ProgressCallback,
 
       // Word-level bounding boxes for spatial extraction (Part A)
       const words: WordBox[] = result.words ?? [];
+      spatialWordBoxes = words;
 
       // First, extract high-severity fields using spatial proximity (Part A)
       const spatialFields = extractFieldsSpatially(words);
+
+      // Part B: targeted whitelisted refinement pass on structured fields.
+      // Re-runs recognition on just the keyword+value crop with a restricted
+      // character set; the whitelisted read is PREFERRED when it disagrees
+      // with the general pass (e.g. a smudged "8" read as "B"). Free-text
+      // fields (manufacturer name/address) are never whitelisted.
+      for (const spatialField of spatialFields) {
+        const whitelist = FIELD_CHAR_WHITELISTS[spatialField.fieldName];
+        if (!whitelist || !spatialField._crop) continue;
+
+        const refined = await runWhitelistedRegionPass(canvas, spatialField._crop, whitelist);
+        if (!refined) continue;
+
+        // Sanity gate: a structured field must contain at least one digit.
+        const normalized = refined.text.replace(/\s+/g, ' ').trim();
+        if (!/\d/.test(normalized)) continue;
+
+        spatialField.value = normalized;
+        spatialField.sourceText = normalized;
+        // Whitelisted single-line reads on the exact region are high-trust.
+        spatialField.confidence = Math.min(0.98, Math.max(refined.confidence, spatialField.confidence));
+      }
 
       // Then, extract remaining fields using traditional regex patterns
       const regexFields = extractFieldsFromText(rawText, totalConfidence);
 
       // Merge fields: spatial extraction takes priority for high-severity fields
-      const highSeverityFieldNames = ['manufacturer_name', 'manufacturer_address', 'manufacture_date', 'mrp'];
+      const highSeverityFieldNames = ['manufacturer_name', 'manufacturer_address', 'manufacture_date', 'mrp', 'net_quantity'];
 
       for (const field of regexFields) {
         const spatialField = spatialFields.find(f => f.fieldName === field.fieldName);
@@ -1519,12 +1665,20 @@ export async function performOCR(imageFile: File, onProgress?: ProgressCallback,
         allFields.push(field);
       }
 
-      // Add spatial fields that weren't covered by regex
+      // Add spatial fields that weren't covered by regex, stripping the
+      // internal _crop helper so it doesn't leak into stored field data.
       for (const spatialField of spatialFields) {
         const regexField = allFields.find(f => f.fieldName === spatialField.fieldName);
 
         if (!regexField && spatialField.confidence > 0.5) {
-          allFields.push(spatialField);
+          const cleanField: ExtractedField = {
+            fieldName: spatialField.fieldName,
+            value: spatialField.value,
+            confidence: spatialField.confidence,
+            sourceText: spatialField.sourceText,
+            reasoning: spatialField.reasoning,
+          };
+          allFields.push(cleanField);
         }
       }
     }
@@ -1550,6 +1704,11 @@ export async function performOCR(imageFile: File, onProgress?: ProgressCallback,
       rawText,
       overallConfidence,
       extractionMethod: hasSpatialFields ? 'local_spatial' : undefined,
+      // Export word boxes for opt-in training-sample capture (review-time crops).
+      wordBoxes: spatialWordBoxes.length > 0
+        ? spatialWordBoxes.map(w => ({ text: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 }))
+        : undefined,
+      ocrCanvasWidth: spatialWordBoxes.length > 0 ? canvas.width : undefined,
     };
   } catch (error) {
     console.error('OCR Error:', error);
@@ -1580,6 +1739,9 @@ export function getFieldConfidence(ocrResult: OCRResult, fieldName: string): num
  */
 async function downscaleImageForAI(file: File, maxEdge: number = 1400, quality: number = 0.85): Promise<File> {
   if (typeof document === 'undefined') return file;
+  /* Lite Mode: 900px cuts canvas/decode memory (~4× less peak RAM than
+     1400px) with acceptable single-label OCR accuracy. */
+  if (isLiteMode()) maxEdge = Math.min(maxEdge, 900);
   try {
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));

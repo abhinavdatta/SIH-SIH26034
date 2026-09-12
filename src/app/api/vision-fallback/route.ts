@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
+import { validateOutboundApiUrl } from '@/lib/ssrf';
 
 /* ── Types ── */
 
@@ -404,6 +405,17 @@ function validateOCRResult(data: unknown): OCRResult | null {
 
 /* ── Main POST Handler ── */
 
+/* ── Serverless execution limit ──
+ *
+ * This app deploys on the Vercel HOBBY plan (10s hard cap per function).
+ * The vision-model calls below routinely need 30-120s, which exceeds the
+ * cap: on Vercel the gateway kills the function and returns 502 before
+ * this route's own error handling runs. Declaring maxDuration = 10 keeps
+ * the limit explicit; the UI steers cloud OCR to faster models/Local mode.
+ * Hobby-incompatible latency is documented in docs/SETUP.md.
+ */
+export const maxDuration = 10;
+
 export async function POST(request: NextRequest) {
   try {
     // Parse request body
@@ -429,6 +441,15 @@ export async function POST(request: NextRequest) {
     if (!apiUrl || !model || !apiKey) {
       return NextResponse.json(
         { error: 'Incomplete provider configuration' },
+        { status: 400 }
+      );
+    }
+
+    // SSRF guard: never let the server post to an arbitrary client-supplied URL.
+    const urlCheck = validateOutboundApiUrl(apiUrl);
+    if (!urlCheck.allowed) {
+      return NextResponse.json(
+        { error: `Blocked: ${urlCheck.reason}` },
         { status: 400 }
       );
     }

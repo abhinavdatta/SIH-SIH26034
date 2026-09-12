@@ -9,12 +9,18 @@ What it does
 3. Uses Tesseract CLI (if installed) to segment lines + produce draft text.
 4. Writes one PNG per text line plus a <name>.gt.txt transcription next to it,
    which is exactly the format tesstrain expects in data/<model>-ground-truth/.
+5. --apply-corrections ZIP: applies human-verified transcriptions exported
+   from the app's Settings → Training Data (review corrections captured as
+   image + .gt.txt pairs). Matching pairs in training/ground-truth are
+   overwritten with the corrected text; new pairs (image not yet present)
+   are copied in wholesale, so app-captured data can be ingested directly.
 
 Usage
 -----
   python training/scripts/prepare_ground_truth.py                  # all images
   python training/scripts/prepare_ground_truth.py path/to/img.jpg  # one image
   python training/scripts/prepare_ground_truth.py --skip-tesseract # crop-only mode
+  python training/scripts/prepare_ground_truth.py --apply-corrections lmcc-ground-truth-2026-09-12.zip
 
 IMPORTANT: review the generated .gt.txt files afterwards and fix OCR mistakes —
 transcriptions must be EXACT or you will teach the model errors.
@@ -195,15 +201,75 @@ def process_image(img_path, out_dir, skip_tesseract):
     return n
 
 
+def apply_corrections_zip(zip_path, out_dir):
+    """Apply app-exported review corrections (image + .gt.txt pairs) to the ground-truth dir.
+
+    The ZIP (from the app's Settings → Training Data → Export) contains:
+      ground-truth/<stem>.png       cropped label region
+      ground-truth/<stem>.gt.txt    human-verified transcription
+      corrections.csv               audit manifest (informational)
+
+    Existing pairs with the same stem are overwritten with the corrected
+    text; pairs whose image is not yet on disk are copied in whole.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = set(zf.namelist())
+        gt_names = sorted(n for n in names if n.startswith("ground-truth/") and n.endswith(".gt.txt"))
+        if not gt_names:
+            print(f"No ground-truth/*.gt.txt entries found in {zip_path}")
+            return
+
+        applied = copied = skipped_empty = 0
+        for name in gt_names:
+            stem = Path(name).stem
+            text = zf.read(name).decode("utf-8")
+            if not text.strip():
+                skipped_empty += 1
+                continue
+
+            png_name = f"ground-truth/{stem}.png"
+            png_target = out_dir / f"{stem}.png"
+            txt_target = out_dir / f"{stem}.gt.txt"
+
+            if png_name in names and not png_target.exists():
+                png_target.write_bytes(zf.read(png_name))
+                copied += 1
+            elif not png_target.exists():
+                print(f"  ⚠️  {stem}: no image in ZIP and none on disk — transcription skipped")
+                continue
+
+            txt_target.write_text(text, encoding="utf-8")
+            applied += 1
+
+        print(f"✅ Corrections applied to {out_dir}: "
+              f"{applied} transcription(s) written, {copied} new image pair(s) copied in")
+        if skipped_empty:
+            print(f"⚠️  Skipped {skipped_empty} empty correction(s)")
+        if "corrections.csv" in names:
+            print("   corrections.csv manifest found — kept for audit (not applied)")
+        print("⚠️  REVIEW the merged .gt.txt files once more before training!")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Prepare tesstrain ground truth from label photos")
     ap.add_argument("images", nargs="*", help="specific image files (default: all in training/images)")
     ap.add_argument("--skip-tesseract", action="store_true", help="only crop pages, skip line segmentation")
     ap.add_argument("--out", default=str(GT_DIR), help="output dir (default: training/ground-truth)")
+    ap.add_argument(
+        "--apply-corrections",
+        metavar="ZIP",
+        help="apply human-verified corrections from a Training Data ZIP exported by the app",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.apply_corrections:
+        apply_corrections_zip(Path(args.apply_corrections), out_dir)
+        return
 
     if args.images:
         paths = [Path(p) for p in args.images]

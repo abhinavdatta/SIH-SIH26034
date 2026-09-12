@@ -7,8 +7,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Settings, Key, Globe, Check, AlertTriangle, Info, Trash2, Plus, Loader2, Sparkles, Server, Zap } from 'lucide-react';
+import { Settings, Key, Globe, Check, AlertTriangle, Info, Trash2, Pencil, Plus, Loader2, Sparkles, Server, Zap } from 'lucide-react';
 import { toast } from 'sonner';
+import { generateId } from '@/lib/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -318,6 +319,22 @@ export default function AIProvidersView() {
   const [customProviderModel, setCustomProviderModel] = useState('');
   const [customProviderApiKey, setCustomProviderApiKey] = useState('');
   const [customProviderCategory, setCustomProviderCategory] = useState<'openrouter' | 'nvidia'>('openrouter');
+  const [showCustomHelp, setShowCustomHelp] = useState(false);
+
+  // Test-connection state for the custom-provider ADD form
+  const [isTestingCustom, setIsTestingCustom] = useState(false);
+  const [customTestResult, setCustomTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Custom provider EDIT dialog state (dedicated dialog — preset "Configure"
+  // dialog is intentionally untouched)
+  const [editingCustomProviderId, setEditingCustomProviderId] = useState<string | null>(null);
+  const [editProviderName, setEditProviderName] = useState('');
+  const [editProviderUrl, setEditProviderUrl] = useState('');
+  const [editProviderModel, setEditProviderModel] = useState('');
+  const [editProviderKey, setEditProviderKey] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isValidatingEdit, setIsValidatingEdit] = useState(false);
+  const [editValidationError, setEditValidationError] = useState<string | null>(null);
 
   const saveProviders = (updatedProviders: AIProvider[]) => {
     setProviders(updatedProviders);
@@ -636,7 +653,7 @@ export default function AIProvidersView() {
       return;
     }
 
-    const customProviderId = `custom-${customProviderCategory}-${Date.now()}`;
+    const customProviderId = `custom-${customProviderCategory}-${generateId()}`;
 
     const newProvider: AIProvider = {
       id: customProviderId,
@@ -661,14 +678,188 @@ export default function AIProvidersView() {
     saveProviders(updated);
 
     // Reset form
-    setCustomProviderName('');
-    setCustomProviderUrl('');
-    setCustomProviderModel('');
-    setCustomProviderApiKey('');
+    resetCustomForm();
     setShowCustomProviderForm(false);
 
     toast.success('Custom Provider Added', {
       description: `"${customProviderName}" has been added to your providers.`
+    });
+  };
+
+  /**
+   * Shared connection test for the custom ADD form and the EDIT dialog.
+   * Posts to /api/validate-api-key exactly like the preset provider flow.
+   * Returns the server's validity + error message for inline display.
+   */
+  const testProviderConnection = async (
+    apiUrl: string,
+    model: string,
+    apiKey: string,
+    category: string
+  ): Promise<{ ok: boolean; message: string }> => {
+    if (!apiKey.trim()) {
+      return { ok: false, message: 'Enter an API key first — validation needs a key to test.' };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+    try {
+      const response = await fetch('/api/validate-api-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, apiUrl, model, category }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type');
+        let errorMessage = `Server error: ${response.status}`;
+        if (contentType?.includes('application/json')) {
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          errorMessage = errorData.error || errorMessage;
+        } else {
+          const text = await response.text();
+          if (text && !text.startsWith('<!DOCTYPE')) errorMessage = text.substring(0, 200);
+        }
+        return { ok: false, message: errorMessage };
+      }
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        return { ok: false, message: 'Server returned a non-JSON response. Is the dev server running?' };
+      }
+
+      const data = await response.json();
+      if (!data.valid) {
+        return { ok: false, message: data.error || 'Validation failed' };
+      }
+      return { ok: true, message: data.message || 'API key is valid and working' };
+    } catch (error: unknown) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        return { ok: false, message: 'Request timed out. The API provider may be slow or unreachable.' };
+      }
+      return { ok: false, message: error instanceof Error ? error.message : 'Network error' };
+    }
+  };
+
+  const handleTestCustomConnection = async () => {
+    if (!customProviderUrl.trim() || !customProviderModel.trim()) {
+      setCustomTestResult({ ok: false, message: 'Fill in the API URL and Model ID before testing.' });
+      return;
+    }
+    setIsTestingCustom(true);
+    setCustomTestResult(null);
+    const result = await testProviderConnection(
+      customProviderUrl.trim(),
+      customProviderModel.trim(),
+      customProviderApiKey,
+      customProviderCategory
+    );
+    setIsTestingCustom(false);
+    setCustomTestResult(result);
+    if (result.ok) {
+      toast.success('Connection works', { description: result.message });
+    } else {
+      toast.error('Connection failed', { description: result.message });
+    }
+  };
+
+  const resetCustomForm = () => {
+    setCustomProviderName('');
+    setCustomProviderUrl('');
+    setCustomProviderModel('');
+    setCustomProviderApiKey('');
+    setCustomTestResult(null);
+    setShowCustomHelp(false);
+  };
+
+  const handleOpenEditCustomProvider = (providerId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) return;
+    setEditingCustomProviderId(providerId);
+    setEditProviderName(provider.name);
+    setEditProviderUrl(provider.apiUrl);
+    setEditProviderModel(provider.model);
+    setEditProviderKey(provider.apiKey || '');
+    setEditValidationError(null);
+  };
+
+  const handleCloseEditCustomProvider = () => {
+    setEditingCustomProviderId(null);
+    setEditProviderName('');
+    setEditProviderUrl('');
+    setEditProviderModel('');
+    setEditProviderKey('');
+    setEditValidationError(null);
+  };
+
+  const handleValidateEditProvider = async () => {
+    const provider = providers.find(p => p.id === editingCustomProviderId);
+    if (!provider) return;
+    setIsValidatingEdit(true);
+    setEditValidationError(null);
+    const result = await testProviderConnection(
+      editProviderUrl.trim(),
+      editProviderModel.trim(),
+      editProviderKey,
+      provider.category
+    );
+    setIsValidatingEdit(false);
+    if (result.ok) {
+      toast.success('API Key Valid', { description: result.message });
+    } else {
+      setEditValidationError(result.message);
+      toast.error('Validation Failed', { description: result.message });
+    }
+  };
+
+  /**
+   * Save an edited custom provider IN PLACE: same ID, same position in the
+   * list, all other fields (tier, features, category...) preserved via
+   * spread. Only name/URL/model/key (and derived flags) change.
+   */
+  const handleSaveEditCustomProvider = async () => {
+    if (!editingCustomProviderId) return;
+
+    if (!editProviderName.trim() || !editProviderUrl.trim() || !editProviderModel.trim()) {
+      setEditValidationError('Name, API URL, and Model ID are all required.');
+      return;
+    }
+
+    try {
+      new URL(editProviderUrl.trim());
+    } catch {
+      setEditValidationError('Invalid API URL — use a full https:// URL.');
+      return;
+    }
+
+    setIsSavingEdit(true);
+    setEditValidationError(null);
+
+    const hasKey = editProviderKey.trim().length > 0;
+    const updated = providers.map(p => {
+      if (p.id !== editingCustomProviderId) return p;
+      return {
+        ...p, // preserve id, category, tier, features, position
+        name: editProviderName.trim(),
+        apiUrl: editProviderUrl.trim(),
+        model: editProviderModel.trim(),
+        apiKey: editProviderKey.trim(),
+        isConfigured: hasKey,
+        isEnabled: hasKey ? p.isEnabled : false,
+      };
+    });
+
+    saveProviders(updated);
+    setIsSavingEdit(false);
+    handleCloseEditCustomProvider();
+
+    toast.success('Provider Updated', {
+      description: `"${editProviderName.trim()}" was updated in place.`
     });
   };
 
@@ -909,6 +1100,16 @@ export default function AIProvidersView() {
                                     style={{ color: 'var(--primary)' }}
                                   >
                                     openrouter.ai/keys
+                                  </a>{' '}
+                                  — or browse free providers in{' '}
+                                  <a
+                                    href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="underline"
+                                    style={{ color: 'var(--primary)' }}
+                                  >
+                                    awesome-freellm-apis
                                   </a>
                                 </p>
                                 {validationError && (
@@ -1075,8 +1276,18 @@ export default function AIProvidersView() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={() => handleOpenEditCustomProvider(provider.id)}
+                            className="text-xs h-8"
+                            aria-label={`Edit ${provider.name}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => handleDeleteCustomProvider(provider.id)}
                             className="text-xs h-8 text-red-600 hover:text-red-700"
+                            aria-label={`Delete ${provider.name}`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -1309,7 +1520,8 @@ export default function AIProvidersView() {
                         className="text-sm font-mono"
                       />
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        OpenRouter-compatible chat completions endpoint
+                        The chat-completions endpoint your provider documents — usually ends in{' '}
+                        <code>/v1/chat/completions</code> or <code>/chat/completions</code>. Check your provider&apos;s API reference page.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -1321,6 +1533,10 @@ export default function AIProvidersView() {
                         onChange={(e) => setCustomProviderModel(e.target.value)}
                         className="text-sm font-mono"
                       />
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        The exact model identifier from your provider&apos;s model list/catalog page — copy it exactly,
+                        including any suffix like <code>:free</code>.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="custom-provider-key-or" className="text-sm">API Key (Optional)</Label>
@@ -1333,8 +1549,101 @@ export default function AIProvidersView() {
                         className="text-sm"
                       />
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        You can add the API key later if needed
+                        Get keys from your provider&apos;s dashboard — see{' '}
+                        <a
+                          href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline"
+                          style={{ color: 'var(--primary)' }}
+                        >
+                          awesome-freellm-apis
+                        </a>{' '}
+                        for free providers. You can add the key later if needed.
                       </p>
+                    </div>
+
+                    {/* Where do I find these? — concrete, non-abstract guidance */}
+                    <div className="rounded-md border" style={{ borderColor: 'var(--border-light)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomHelp(prev => !prev)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium cursor-pointer"
+                        style={{ color: 'var(--text-primary)' }}
+                        aria-expanded={showCustomHelp}
+                      >
+                        Where do I find these?
+                        <span style={{ color: 'var(--text-muted)' }}>{showCustomHelp ? '−' : '+'}</span>
+                      </button>
+                      {showCustomHelp && (
+                        <div className="px-3 pb-3 text-xs space-y-2" style={{ color: 'var(--text-secondary)' }}>
+                          <p>
+                            <strong>Model ID:</strong> browse your provider&apos;s model catalog, e.g.{' '}
+                            <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>openrouter.ai/models</a>,
+                            and copy the identifier exactly (e.g. <code>meta/llama-3.2-11b-vision-instruct</code>).
+                          </p>
+                          <p>
+                            <strong>API Key:</strong> create it in your provider&apos;s dashboard under &quot;API Keys&quot;, e.g.{' '}
+                            <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>openrouter.ai/keys</a>{' '}
+                            or{' '}<a href="https://build.nvidia.com/" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>build.nvidia.com</a>.
+                          </p>
+                          <p>
+                            <strong>API URL:</strong> shown on the provider&apos;s API-reference / &quot;Quickstart&quot; page — it is the same URL
+                            their curl examples POST to.
+                          </p>
+                          <p>
+                            <strong>Picking a provider:</strong> the{' '}
+                            <a
+                              href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline"
+                              style={{ color: 'var(--primary)' }}
+                            >
+                              awesome-freellm-apis list
+                            </a>{' '}
+                            catalogues free LLM APIs and links to each one&apos;s key/signup page.
+                          </p>
+                          <p style={{ color: 'var(--text-muted)' }}>
+                            Note: the model must be vision-capable (it needs to accept images) for OCR scans.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Test connection — catch mistakes at entry time */}
+                    <div className="space-y-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={handleTestCustomConnection}
+                        disabled={isTestingCustom || !customProviderUrl.trim() || !customProviderModel.trim() || !customProviderApiKey.trim()}
+                      >
+                        {isTestingCustom ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Testing...
+                          </>
+                        ) : (
+                          'Test connection'
+                        )}
+                      </Button>
+                      {!customProviderApiKey.trim() && (
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          Enter an API key to test — the test sends a tiny request to the provider with your key.
+                        </p>
+                      )}
+                      {customTestResult && (
+                        <div
+                          className={`flex items-start gap-2 text-[10px] p-2 rounded-md ${customTestResult.ok ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                          style={{ background: 'var(--bg-secondary)' }}
+                        >
+                          {customTestResult.ok
+                            ? <Check className="h-3 w-3 mt-0.5 shrink-0" />
+                            : <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />}
+                          <span>{customTestResult.ok ? '✓ ' : ''}{customTestResult.message}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <DialogFooter>
@@ -1342,10 +1651,7 @@ export default function AIProvidersView() {
                       variant="outline"
                       onClick={() => {
                         setShowCustomProviderForm(false);
-                        setCustomProviderName('');
-                        setCustomProviderUrl('');
-                        setCustomProviderModel('');
-                        setCustomProviderApiKey('');
+                        resetCustomForm();
                       }}
                     >
                       Cancel
@@ -1491,6 +1797,16 @@ export default function AIProvidersView() {
                                     style={{ color: 'var(--primary)' }}
                                   >
                                     build.nvidia.com
+                                  </a>{' '}
+                                  — or browse free providers in{' '}
+                                  <a
+                                    href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="underline"
+                                    style={{ color: 'var(--primary)' }}
+                                  >
+                                    awesome-freellm-apis
                                   </a>
                                 </p>
                                 {validationError && (
@@ -1647,8 +1963,18 @@ export default function AIProvidersView() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={() => handleOpenEditCustomProvider(provider.id)}
+                            className="text-xs h-8"
+                            aria-label={`Edit ${provider.name}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => handleDeleteCustomProvider(provider.id)}
                             className="text-xs h-8 text-red-600 hover:text-red-700"
+                            aria-label={`Delete ${provider.name}`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -1881,7 +2207,8 @@ export default function AIProvidersView() {
                         className="text-sm font-mono"
                       />
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        NVIDIA-compatible chat completions endpoint
+                        The chat-completions endpoint your provider documents — usually ends in{' '}
+                        <code>/v1/chat/completions</code> or <code>/chat/completions</code>. Check your provider&apos;s API reference page.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -1893,6 +2220,10 @@ export default function AIProvidersView() {
                         onChange={(e) => setCustomProviderModel(e.target.value)}
                         className="text-sm font-mono"
                       />
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        The exact model identifier from your provider&apos;s model list/catalog page — copy it exactly,
+                        including any suffix like <code>:free</code>.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="custom-provider-key-nv" className="text-sm">API Key (Optional)</Label>
@@ -1905,8 +2236,102 @@ export default function AIProvidersView() {
                         className="text-sm"
                       />
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        You can add the API key later if needed
+                        Get keys from your provider&apos;s dashboard — see{' '}
+                        <a
+                          href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline"
+                          style={{ color: 'var(--primary)' }}
+                        >
+                          awesome-freellm-apis
+                        </a>{' '}
+                        for free providers. You can add the key later if needed.
                       </p>
+                    </div>
+
+                    {/* Where do I find these? — concrete, non-abstract guidance (shared with OR form) */}
+                    <div className="rounded-md border" style={{ borderColor: 'var(--border-light)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomHelp(prev => !prev)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium cursor-pointer"
+                        style={{ color: 'var(--text-primary)' }}
+                        aria-expanded={showCustomHelp}
+                      >
+                        Where do I find these?
+                        <span style={{ color: 'var(--text-muted)' }}>{showCustomHelp ? '−' : '+'}</span>
+                      </button>
+                      {showCustomHelp && (
+                        <div className="px-3 pb-3 text-xs space-y-2" style={{ color: 'var(--text-secondary)' }}>
+                          <p>
+                            <strong>Model ID:</strong> browse your provider&apos;s model catalog, e.g.{' '}
+                            <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>openrouter.ai/models</a>{' '}
+                            or <a href="https://build.nvidia.com/models" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>build.nvidia.com/models</a>,
+                            and copy the identifier exactly (e.g. <code>meta/llama-3.2-11b-vision-instruct</code>).
+                          </p>
+                          <p>
+                            <strong>API Key:</strong> create it in your provider&apos;s dashboard under &quot;API Keys&quot;, e.g.{' '}
+                            <a href="https://build.nvidia.com/" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>build.nvidia.com</a>{' '}
+                            or <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>openrouter.ai/keys</a>.
+                          </p>
+                          <p>
+                            <strong>API URL:</strong> shown on the provider&apos;s API-reference / &quot;Quickstart&quot; page — it is the same URL
+                            their curl examples POST to.
+                          </p>
+                          <p>
+                            <strong>Picking a provider:</strong> the{' '}
+                            <a
+                              href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline"
+                              style={{ color: 'var(--primary)' }}
+                            >
+                              awesome-freellm-apis list
+                            </a>{' '}
+                            catalogues free LLM APIs and links to each one&apos;s key/signup page.
+                          </p>
+                          <p style={{ color: 'var(--text-muted)' }}>
+                            Note: the model must be vision-capable (it needs to accept images) for OCR scans.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Test connection — catch mistakes at entry time (shared with OR form) */}
+                    <div className="space-y-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={handleTestCustomConnection}
+                        disabled={isTestingCustom || !customProviderUrl.trim() || !customProviderModel.trim() || !customProviderApiKey.trim()}
+                      >
+                        {isTestingCustom ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Testing...
+                          </>
+                        ) : (
+                          'Test connection'
+                        )}
+                      </Button>
+                      {!customProviderApiKey.trim() && (
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          Enter an API key to test — the test sends a tiny request to the provider with your key.
+                        </p>
+                      )}
+                      {customTestResult && (
+                        <div
+                          className={`flex items-start gap-2 text-[10px] p-2 rounded-md ${customTestResult.ok ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                          style={{ background: 'var(--bg-secondary)' }}
+                        >
+                          {customTestResult.ok
+                            ? <Check className="h-3 w-3 mt-0.5 shrink-0" />
+                            : <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />}
+                          <span>{customTestResult.ok ? '✓ ' : ''}{customTestResult.message}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <DialogFooter>
@@ -1914,10 +2339,7 @@ export default function AIProvidersView() {
                       variant="outline"
                       onClick={() => {
                         setShowCustomProviderForm(false);
-                        setCustomProviderName('');
-                        setCustomProviderUrl('');
-                        setCustomProviderModel('');
-                        setCustomProviderApiKey('');
+                        resetCustomForm();
                       }}
                     >
                       Cancel
@@ -1932,6 +2354,130 @@ export default function AIProvidersView() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Edit Custom Provider Dialog — dedicated (preset Configure dialog untouched).
+          Pre-filled with the provider's current name, URL, model, and key; saving
+          updates the record in place (same ID, same list position). */}
+      <Dialog
+        open={editingCustomProviderId !== null}
+        onOpenChange={(open) => {
+          if (!open) handleCloseEditCustomProvider();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Edit Custom Provider</DialogTitle>
+            <DialogDescription className="text-xs">
+              Update the provider details. Changes are saved in place — the provider keeps its position
+              and ID. Your API key is stored locally in your browser.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-provider-name" className="text-sm">Provider Name *</Label>
+              <Input
+                id="edit-provider-name"
+                placeholder="e.g., My Custom Provider"
+                value={editProviderName}
+                onChange={(e) => setEditProviderName(e.target.value)}
+                className="text-sm"
+                disabled={isSavingEdit || isValidatingEdit}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-provider-url" className="text-sm">API URL *</Label>
+              <Input
+                id="edit-provider-url"
+                placeholder="https://provider.example.com/v1/chat/completions"
+                value={editProviderUrl}
+                onChange={(e) => setEditProviderUrl(e.target.value)}
+                className="text-sm font-mono"
+                disabled={isSavingEdit || isValidatingEdit}
+              />
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                The chat-completions endpoint from your provider&apos;s API reference — usually ends in{' '}
+                <code>/v1/chat/completions</code>.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-provider-model" className="text-sm">Model ID *</Label>
+              <Input
+                id="edit-provider-model"
+                placeholder="e.g., meta/llama-3.2-11b-vision-instruct"
+                value={editProviderModel}
+                onChange={(e) => setEditProviderModel(e.target.value)}
+                className="text-sm font-mono"
+                disabled={isSavingEdit || isValidatingEdit}
+              />
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                Copy the identifier exactly from your provider&apos;s model catalog, including suffixes like <code>:free</code>.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-provider-key" className="text-sm">API Key</Label>
+              <Input
+                id="edit-provider-key"
+                type="password"
+                placeholder={editProviderKey ? '•••••••• (saved — type to replace)' : 'Enter your API key'}
+                value={editProviderKey}
+                onChange={(e) => setEditProviderKey(e.target.value)}
+                className="text-sm"
+                disabled={isSavingEdit || isValidatingEdit}
+              />
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                Get keys from your provider&apos;s dashboard — see{' '}
+                <a
+                  href="https://github.com/open-free-llm-api/awesome-freellm-apis"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  awesome-freellm-apis
+                </a>
+              </p>
+            </div>
+
+            {editValidationError && (
+              <div className="flex items-start gap-2 text-red-600 dark:text-red-400 text-[11px] p-2 rounded-md" style={{ background: 'var(--bg-secondary)' }}>
+                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                <span>{editValidationError}</span>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              onClick={handleCloseEditCustomProvider}
+              disabled={isSavingEdit || isValidatingEdit}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleValidateEditProvider}
+              disabled={!editProviderUrl.trim() || !editProviderModel.trim() || !editProviderKey.trim() || isSavingEdit || isValidatingEdit}
+            >
+              {isValidatingEdit ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Validating...
+                </>
+              ) : (
+                'Validate Key'
+              )}
+            </Button>
+            <Button onClick={handleSaveEditCustomProvider} disabled={isSavingEdit || isValidatingEdit}>
+              {isSavingEdit ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Saving...
+                </>
+              ) : (
+                'Save Changes'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Info Banner */}
       <Card className="card-static">

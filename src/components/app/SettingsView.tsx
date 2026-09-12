@@ -5,11 +5,21 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Settings as SettingsIcon, Sun, Moon, Trash2, Database, Info, Shield, Send, Download, CheckCircle2, Mail, MessageSquare, User, Loader2 } from 'lucide-react';
+import { Settings as SettingsIcon, Sun, Moon, Trash2, Database, Info, Shield, Send, Download, CheckCircle2, Mail, MessageSquare, User, Loader2, GraduationCap, Scale, FileText, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTheme } from 'next-themes';
 import { notifyDataChange } from '@/lib/hooks';
 import { seedDemoData } from '@/lib/local-data';
+import { getLiteModePref, setLiteModePref, isLiteMode, getLiteModeRecommendation, type LiteModePref } from '@/lib/lite-mode';
+import { TERMS_SECTIONS, PRIVACY_SECTIONS } from '@/lib/legal-content';
+import LegalAccordion from './LegalAccordion';
+import {
+  isTrainingCaptureEnabled,
+  setTrainingCaptureEnabled,
+  getTrainingPairCount,
+  downloadTrainingPairsZip,
+  clearTrainingPairs,
+} from '@/lib/training-samples';
 
 /* ── PWA Install Hook ── */
 
@@ -104,6 +114,77 @@ export default function SettingsView() {
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formSubmitted, setFormSubmitted] = useState(false);
 
+  /* Lite-mode state; the module dispatches 'lmcc-lite-mode-changed' on change */
+  const [litePref, setLitePref] = useState<LiteModePref>(() => getLiteModePref());
+  const [liteActive, setLiteActive] = useState(() => isLiteMode());
+  useEffect(() => {
+    const sync = () => {
+      setLitePref(getLiteModePref());
+      setLiteActive(isLiteMode());
+    };
+    window.addEventListener('lmcc-lite-mode-changed', sync);
+    return () => window.removeEventListener('lmcc-lite-mode-changed', sync);
+  }, []);
+  const liteRecommendation = getLiteModeRecommendation();
+
+  /* Training-data capture state (lazy init — localStorage is sync on client) */
+  const [trainingEnabled, setTrainingEnabled] = useState(() => isTrainingCaptureEnabled());
+  const [trainingPairCount, setTrainingPairCount] = useState(() => {
+    // Pair count is async (IndexedDB); start at 0 and subscribe in an effect.
+    return 0;
+  });
+  const [isExportingTraining, setIsExportingTraining] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getTrainingPairCount().then((count) => {
+      if (!cancelled) setTrainingPairCount(count);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function handleToggleTrainingCapture(enabled: boolean) {
+    setTrainingCaptureEnabled(enabled);
+    setTrainingEnabled(enabled);
+    if (!enabled) {
+      void getTrainingPairCount().then(setTrainingPairCount);
+      toast.info('Training data capture disabled', {
+        description: 'Retained scan images were deleted. Already-saved correction pairs are kept until you clear them.'
+      });
+    } else {
+      toast.success('Training data capture enabled', {
+        description: 'Your corrected field values (and the label image region) will be kept for OCR model training.'
+      });
+    }
+  }
+
+  async function handleExportTraining() {
+    setIsExportingTraining(true);
+    try {
+      const count = await downloadTrainingPairsZip();
+      if (count === null) {
+        toast.info('No training pairs yet', {
+          description: 'Correct fields in the Review Queue (with capture enabled) to build training data.'
+        });
+      } else {
+        toast.success(`Exported ${count} training pair${count !== 1 ? 's' : ''}`, {
+          description: 'Unzip into training/ground-truth/ — each image ships with its .gt.txt transcription.'
+        });
+      }
+    } finally {
+      setIsExportingTraining(false);
+    }
+  }
+
+  function handleClearTraining() {
+    void clearTrainingPairs().then(() => {
+      setTrainingPairCount(0);
+      toast.info('Training pairs cleared');
+    });
+  }
+
   function clearAllData() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('lmcc_scans');
@@ -175,6 +256,55 @@ export default function SettingsView() {
         </div>
       </div>
 
+      {/* ── Performance (Lite Mode) ── */}
+      <div className="card-static p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Zap className="h-4 w-4" style={{ color: 'var(--primary)' }} />
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Performance</h3>
+          <span
+            className="ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium"
+            style={{
+              background: liteActive ? 'var(--primary-light)' : 'var(--bg-secondary)',
+              color: liteActive ? 'var(--primary)' : 'var(--text-muted)',
+            }}
+          >
+            {liteActive ? 'Lite Mode active' : 'Full mode'}
+          </span>
+        </div>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Lite Mode (low memory use)</p>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              Trims background animations, the custom cursor, smooth scrolling, and hover
+              transitions — and scans process at reduced resolution to use far less RAM.
+              {litePref === 'auto' && ` ${liteRecommendation.reason}`}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-1" role="group" aria-label="Lite Mode preference">
+            {(['auto', 'on', 'off'] as LiteModePref[]).map((pref) => (
+              <button
+                key={pref}
+                onClick={() => setLiteModePref(pref)}
+                className="btn-ghost !px-2.5 !py-1 text-xs capitalize"
+                style={
+                  litePref === pref
+                    ? { background: 'var(--primary-light)', color: 'var(--primary)' }
+                    : undefined
+                }
+                aria-pressed={litePref === pref}
+              >
+                {pref}
+              </button>
+            ))}
+          </div>
+        </div>
+        {litePref === 'auto' && (
+          <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>
+            Auto: Lite Mode turns itself on only for devices reporting ~2GB RAM or 2 or fewer CPU cores.
+          </p>
+        )}
+      </div>
+
       {/* ── Install App (PWA) ── */}
       <div className="card-static p-5">
         <div className="flex items-center gap-2 mb-4">
@@ -195,7 +325,7 @@ export default function SettingsView() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Install LMCC on your device</p>
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Get quick access, work offline, and receive updates.</p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Get quick access, scan without a server account, and receive updates.</p>
             </div>
             <button onClick={install} className="btn-primary shrink-0">
               <Download className="h-4 w-4" /> Install App
@@ -231,6 +361,71 @@ export default function SettingsView() {
             <Trash2 className="h-3.5 w-3.5" /> Clear Data
           </button>
         </div>
+      </div>
+
+      {/* ── Training Data (opt-in) ── */}
+      <div className="card-static p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <GraduationCap className="h-4 w-4" style={{ color: 'var(--primary)' }} />
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Training Data</h3>
+        </div>
+
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Keep my corrections for OCR model training
+            </p>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              <strong>Off by default.</strong> When on, a downscaled copy of each scanned label is kept on this
+              device for 7 days. If you later correct a field in the Review Queue, the label region plus your
+              corrected text are saved as a labeled training example. Nothing is uploaded — everything stays in
+              your browser until you export it yourself.
+            </p>
+          </div>
+          <button
+            onClick={() => handleToggleTrainingCapture(!trainingEnabled)}
+            className="btn-ghost shrink-0"
+            role="switch"
+            aria-checked={trainingEnabled}
+          >
+            {trainingEnabled ? 'On' : 'Off'}
+          </button>
+        </div>
+
+        {trainingEnabled && (
+          <div className="flex items-start gap-2 mt-3 p-3 rounded-md text-xs" style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--primary)' }} />
+            <span>
+              Capture is <strong>active</strong> — corrections you make in the Review Queue are being retained as
+              training examples (currently {trainingPairCount} pair{trainingPairCount !== 1 ? 's' : ''} stored).
+            </span>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 mt-4">
+          <button
+            onClick={handleExportTraining}
+            disabled={isExportingTraining || trainingPairCount === 0}
+            className="btn-ghost"
+          >
+            {isExportingTraining
+              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Exporting...</>
+              : <><Download className="h-3.5 w-3.5" /> Export training ZIP ({trainingPairCount})</>}
+          </button>
+          <button
+            onClick={handleClearTraining}
+            disabled={trainingPairCount === 0}
+            className="btn-ghost"
+            style={{ color: 'var(--danger)' }}
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Clear pairs
+          </button>
+        </div>
+        <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>
+          The ZIP contains <code>ground-truth/&lt;name&gt;.png</code> + <code>&lt;name&gt;.gt.txt</code> pairs — drop its
+          contents straight into <code>training/ground-truth/</code> for tesstrain, or upload it into the Colab
+          notebook. Review the .gt.txt files before training.
+        </p>
       </div>
 
       {/* ── Contact Form ── */}
@@ -359,9 +554,34 @@ export default function SettingsView() {
             Built for Smart India Hackathon 2024.
           </p>
           <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>
-            All data is processed and stored locally on your device. No data is sent to any server.
-            Works completely offline.
+            All data is processed and stored locally on your device. No data is sent to any server
+            unless you enable cloud OCR with your own AI provider.
           </p>
+        </div>
+      </div>
+
+      {/* ── Legal: Terms & Conditions + Privacy Policy ── */}
+      <div className="card-static p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Scale className="h-4 w-4" style={{ color: 'var(--primary)' }} />
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Legal</h3>
+        </div>
+        <div className="rounded-[var(--radius-md)] p-4 border" style={{ background: 'var(--bg-input)', borderColor: 'var(--border-light)' }}>
+          <div className="flex items-center gap-2 mb-2">
+            <FileText className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
+            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Terms &amp; Conditions</p>
+          </div>
+          <LegalAccordion sections={TERMS_SECTIONS} />
+          <div className="flex items-center gap-2 mt-4 mb-2">
+            <Shield className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
+            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Privacy Policy</p>
+          </div>
+          <LegalAccordion sections={PRIVACY_SECTIONS} />
+          <p className="text-[10px] mt-3" style={{ color: 'var(--text-muted)' }}>
+            Last updated: September 2026. LMCC is a Smart India Hackathon project; these documents
+            describe the app as it ships — fully client-side storage with optional user-configured AI providers.
+          </p>
+        </div>
         </div>
       </div>
     </div>

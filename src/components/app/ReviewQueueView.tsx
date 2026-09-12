@@ -14,6 +14,7 @@ import { updateFieldReview } from '@/lib/local-data';
 import { FIELD_KEY_TO_LABEL, FIELD_STATUS_COLORS, SEVERITY_COLORS } from '@/lib/types';
 import { ConfidenceBadge } from '@/components/confidence-badge';
 import { useAppStore } from '@/lib/store';
+import { captureTrainingPair, isTrainingCaptureEnabled } from '@/lib/training-samples';
 
 export default function ReviewQueueView() {
   const queue = useReviewQueue();
@@ -36,7 +37,28 @@ export default function ReviewQueueView() {
       toast.error('Please enter a corrected value');
       return;
     }
+    const item = queue.find(q => q.scanId === scanId && q.scanFieldId === fieldId);
     updateFieldReview(scanId, fieldId, { value: val, reviewStatus: 'overridden' });
+
+    // Opt-in training capture: this override IS a human-verified correction
+    // of a low-confidence field — exactly a labeled OCR training pair. Only
+    // fires on actual overrides (never plain Approve), and only when the
+    // user enabled training capture in Settings. Fire-and-forget.
+    if (isTrainingCaptureEnabled() && item) {
+      void captureTrainingPair({
+        scanId,
+        fieldName: item.fieldName,
+        correctedValue: val.trim(),
+        originalValue: item.originalValue,
+        scanProductName: item.scanProductName,
+      });
+    }
+
+    setOverrideValues(prev => {
+      const next = { ...prev };
+      delete next[`${scanId}-${fieldId}`];
+      return next;
+    });
     triggerRefresh();
     notifyDataChange();
     toast.success('Field overridden');

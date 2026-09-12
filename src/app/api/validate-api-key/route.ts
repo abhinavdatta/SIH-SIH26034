@@ -4,6 +4,18 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server';
+import { validateOutboundApiUrl } from '@/lib/ssrf';
+
+/* ── Serverless execution limit ──
+ *
+ * This app deploys on the Vercel HOBBY plan, where serverless functions
+ * are hard-capped at 10 seconds. Setting maxDuration = 10 makes the
+ * limit explicit and lets local dev behave like production. The outbound
+ * validation request below is deliberately cheap (max_tokens: 1, 8s
+ * timeout) so it completes well inside the cap — a longer internal
+ * timeout would be killed by Vercel's gateway (the historic 502 bug).
+ */
+export const maxDuration = 10;
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,6 +26,15 @@ export async function POST(request: NextRequest) {
     if (!apiKey || !apiUrl || !model || !category) {
       return NextResponse.json(
         { error: 'Missing required fields: apiKey, apiUrl, model, category' },
+        { status: 400 }
+      );
+    }
+
+    // SSRF guard: never let the server fetch an arbitrary client-supplied URL.
+    const urlCheck = validateOutboundApiUrl(apiUrl);
+    if (!urlCheck.allowed) {
+      return NextResponse.json(
+        { valid: false, error: `Blocked: ${urlCheck.reason}` },
         { status: 400 }
       );
     }
@@ -60,7 +81,7 @@ export async function POST(request: NextRequest) {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s — must fit Vercel Hobby's 10s function cap
 
       const response = await fetch(apiUrl, {
         method: 'POST',

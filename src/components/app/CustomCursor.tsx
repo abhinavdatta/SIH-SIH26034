@@ -5,14 +5,26 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { isLiteMode } from '@/lib/lite-mode';
 
 export default function CustomCursor() {
   const dotRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Skip on touch devices
-    if (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches) return;
+    // Skip on touch devices, Lite Mode (saves a per-frame rAF loop), and
+    // when the user prefers reduced motion.
+    if (
+      typeof window !== 'undefined' &&
+      (window.matchMedia('(pointer: coarse)').matches ||
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+        isLiteMode())
+    ) return;
+
+    // If the user enables Lite Mode while the cursor is running, stop it.
+    let disabled = false;
+    const onLiteChange = () => { if (isLiteMode()) disabled = true; };
+    window.addEventListener('lmcc-lite-mode-changed', onLiteChange);
 
     const dot = dotRef.current;
     const ring = ringRef.current;
@@ -53,6 +65,11 @@ export default function CustomCursor() {
 
     // Smooth ring follow
     const animate = () => {
+      if (disabled) {
+        dot.style.opacity = '0';
+        ring.style.opacity = '0';
+        return; // do not re-queue — loop ends, zero ongoing CPU
+      }
       ringX += (mouseX - ringX) * 0.15;
       ringY += (mouseY - ringY) * 0.15;
       ring.style.left = `${ringX - 16}px`;
@@ -68,6 +85,7 @@ export default function CustomCursor() {
     const raf = requestAnimationFrame(animate);
 
     return () => {
+      window.removeEventListener('lmcc-lite-mode-changed', onLiteChange);
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseover', onMouseOver);
       document.removeEventListener('mouseout', onMouseOut);

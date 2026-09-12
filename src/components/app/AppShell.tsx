@@ -5,15 +5,79 @@
 
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, Upload, ClipboardCheck, History,
-  Settings, Shield, Menu, BookOpen, Sun, Moon, Bot,
+  Settings, Shield, Menu, BookOpen, Sun, Moon, Bot, Keyboard, X,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { useTheme } from 'next-themes';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
 import type { ViewName } from '@/lib/types';
+import { matchShortcut, VIEW_SHORTCUTS } from '@/lib/keyboard-shortcuts';
+import { isLiteMode } from '@/lib/lite-mode';
+
+/* ── Skip Link — first focusable element; jumps past the sidebar to content ── */
+
+function SkipLink() {
+  return (
+    <a
+      href="#main-content"
+      className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100000] focus:px-4 focus:py-2 focus:rounded-[var(--radius-md)] focus:text-sm focus:font-medium"
+      style={{ background: 'var(--primary)', color: '#fff' }}
+    >
+      Skip to main content
+    </a>
+  );
+}
+
+/* ── Keyboard Shortcuts Cheat Sheet (Alt+K) ── */
+
+function ShortcutsCheatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[99999] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Keyboard shortcuts"
+        className="w-full max-w-sm rounded-[var(--radius-lg)] p-5 border"
+        style={{ background: 'var(--bg-card)', borderColor: 'var(--border-default)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <Keyboard className="h-4 w-4" style={{ color: 'var(--primary)' }} />
+            Keyboard shortcuts
+          </h3>
+          <button onClick={onClose} className="btn-ghost !p-1.5" aria-label="Close keyboard shortcuts">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <ul className="space-y-2">
+          {VIEW_SHORTCUTS.map((s) => (
+            <li key={s.keys} className="flex items-center justify-between text-[13px]">
+              <span style={{ color: 'var(--text-secondary)' }}>{s.description}</span>
+              <kbd
+                className="px-2 py-0.5 rounded font-mono text-[11px] border"
+                style={{ background: 'var(--bg-input)', borderColor: 'var(--border-light)', color: 'var(--text-primary)' }}
+              >
+                {s.keys}
+              </kbd>
+            </li>
+          ))}
+        </ul>
+        <p className="text-[11px] mt-3" style={{ color: 'var(--text-muted)' }}>
+          Tab / Shift+Tab moves between controls. Buttons are also reachable with arrow keys inside lists.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 /* ── Navigation Configuration ── */
 
@@ -79,7 +143,18 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             <button
               key={item.view}
               onClick={() => handleNav(item.view)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors cursor-pointer ${
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const buttons = Array.from(
+                    e.currentTarget.closest('nav')?.querySelectorAll<HTMLButtonElement>('button') ?? []
+                  );
+                  const idx = buttons.indexOf(e.currentTarget);
+                  const next = buttons[(idx + (e.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length];
+                  next?.focus();
+                }
+              }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors cursor-pointer roving-tabindex ${
                 isActive ? 'nav-active' : 'hover:bg-[var(--bg-hover)]'
               }`}
               style={{ color: isActive ? 'var(--primary)' : 'var(--text-secondary)' }}
@@ -92,7 +167,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
 
-      {/* Bottom Section: Theme Toggle + Offline Badge */}
+      {/* Bottom Section: Theme Toggle */}
       <div className="px-3 pb-5 pt-3 border-t" style={{ borderColor: 'var(--border-light)' }}>
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -107,9 +182,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
         <div className="px-3 pt-3">
-          <p className="text-[10px] font-medium flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            Offline Mode — No internet required
+          <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>
+            Legal Metrology (Packaged Commodities) Rules, 2011
           </p>
         </div>
       </div>
@@ -138,15 +212,45 @@ function HeaderThemeToggle() {
 /* ── Main AppShell ── */
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const { currentView, sidebarOpen, setSidebarOpen, toggleSidebar } = useAppStore();
+  const { currentView, sidebarOpen, setSidebarOpen, toggleSidebar, setCurrentView } = useAppStore();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  /* Close mobile sidebar on view change */
+  /* Close mobile sidebar on view change + move focus to the content region
+     so keyboard users continue from the top of the new view (tabIndex=-1). */
   useEffect(() => {
     setSidebarOpen(false);
+    document.getElementById('main-content')?.focus({ preventScroll: true });
   }, [currentView, setSidebarOpen]);
+
+  /* Global keyboard shortcuts: Alt+1..7 switch views, Alt+K toggles the
+     cheat sheet. Single window listener — components add none of their own. */
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const shortcut = matchShortcut(e);
+      if (!shortcut) return;
+      e.preventDefault();
+      if (shortcut.view === 'cheatsheet') {
+        setShortcutsOpen((open) => !open);
+      } else {
+        setCurrentView(shortcut.view);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setCurrentView]);
+
+  /* Lite Mode: body class drives CSS downgrades (animations, cursor,
+     transitions). Re-applied when Settings changes the preference. */
+  useEffect(() => {
+    const apply = () => document.body.classList.toggle('lite-mode', isLiteMode());
+    apply();
+    window.addEventListener('lmcc-lite-mode-changed', apply);
+    return () => window.removeEventListener('lmcc-lite-mode-changed', apply);
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>
+      <SkipLink />
       {/* ── Desktop Sidebar (≥1024px) ── */}
       <aside
         className="hidden lg:flex flex-col shrink-0 border-r"
@@ -196,7 +300,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* ── Scrollable Content ── */}
-        <main className="flex-1 overflow-y-auto" role="main">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 overflow-y-auto outline-none"
+          role="main"
+        >
           <div className="animate-fade-in p-4 md:p-6 lg:p-8 pb-8">
             {children}
           </div>
@@ -213,6 +322,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </p>
         </footer>
       </div>
+
+      <ShortcutsCheatSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }

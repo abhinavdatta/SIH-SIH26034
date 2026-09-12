@@ -81,6 +81,12 @@ The application will be available at: `http://localhost:3000`
 6. Click "Save API Key"
 7. Enable the provider toggle
 
+Don't know which provider to pick? Browse
+[awesome-freellm-apis](https://github.com/open-free-llm-api/awesome-freellm-apis)
+— a curated list of free LLM APIs and where to get keys. The custom-provider
+forms also include a "Where do I find these?" help section and a
+**Test connection** button that verifies your URL/model/key before saving.
+
 ### Choose OCR Mode
 
 In the **Scan Product** view (Upload Mode):
@@ -94,6 +100,40 @@ In the **Scan Product** view (Upload Mode):
 bun run build
 bun run start
 ```
+
+## Deployment Target: Vercel Hobby Plan
+
+This project deploys on the **Vercel Hobby plan**, which hard-caps serverless
+function execution at **10 seconds** — `maxDuration` cannot be raised above 10
+on Hobby regardless of what the code requests.
+
+Consequences baked into the code:
+
+- Both API routes (`/api/validate-api-key`, `/api/vision-fallback`) declare
+  `export const maxDuration = 10`.
+- **API key validation** is deliberately cheap: `max_tokens: 1` with an 8s
+  internal timeout, so the route finishes well inside the cap. The historic
+  `Server error: 502` on validation was Vercel's gateway killing the function
+  before its own 20s timeout fired; the shorter internal timeout fixes that.
+- **Cloud vision OCR routinely exceeds 10s** (NVIDIA vision models measured at
+  30–120s per label). On Hobby this will 502 for slow models no matter what the
+  code does. Mitigations:
+  - Prefer fast vision models (e.g. Llama 3.2 11B Vision) over 90B models.
+  - Use **Local** OCR mode (fully offline, no function limits — Tesseract runs
+    in your browser) when working with slow models.
+  - If you upgrade to Vercel **Pro**, raise `maxDuration` to 60 in both route
+    files and the internal timeouts (currently 8s validate / unbounded vision)
+    can be raised to match.
+
+## Finding Free LLM APIs & Keys
+
+A community-maintained catalogue of free LLM API providers (with links to each
+provider's key/signup page) lives at:
+
+**https://github.com/open-free-llm-api/awesome-freellm-apis**
+
+The app links to this list inside **AI Providers → Add Custom Provider →
+"Where do I find these?"**.
 
 ## Troubleshooting
 

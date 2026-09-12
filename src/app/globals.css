@@ -165,6 +165,58 @@ body {
   .custom-cursor, .custom-cursor-ring { display: none !important; }
 }
 
+/* ── Accessibility: visible keyboard focus ──
+   Both :focus-visible (modern) and .focus-ring (roving tabindex, where
+   focus-visible alone can't distinguish mouse activation) get a clear
+   2px outline that meets 3:1 contrast against adjacent colors. */
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.focus-ring:focus-visible,
+.focus-ring:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 4px);
+}
+
+/* ── Reduced motion: respect the OS setting ── */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .custom-cursor, .custom-cursor-ring { display: none !important; }
+}
+
+/* ── Lite Mode (low-memory devices) — pure presentation downgrades only.
+   Applied via body.lite-mode; the class is managed by AppShell. ── */
+html:has(body.lite-mode) {
+  scroll-behavior: auto; /* no smooth scrolling */
+}
+body.lite-mode .custom-cursor,
+body.lite-mode .custom-cursor-ring {
+  display: none !important; /* cursor dot+ring run a rAF loop every frame */
+}
+body.lite-mode .animate-fade-in {
+  animation: none !important;
+}
+body.lite-mode .card,
+body.lite-mode .card-static,
+body.lite-mode button,
+body.lite-mode a {
+  transition: none !important;
+  animation: none !important;
+}
+body.lite-mode .card:hover {
+  box-shadow: var(--shadow-sm) !important;
+}
+
 /* ── Card System ── */
 
 .card {
