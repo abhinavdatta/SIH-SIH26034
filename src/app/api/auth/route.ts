@@ -25,6 +25,9 @@ import 'server-only';
 import {
   isDurableBackend,
   pepperSource,
+  rateLimitMode,
+  hitRateLimit,
+  resetRateLimit,
   getAccount,
   saveAccount,
   hashVerifier,
@@ -40,7 +43,7 @@ import {
   getAccountById,
   type StoredAccount,
 } from '@/lib/server/auth-store';
-import { randomBytes, createHmac } from 'crypto';
+import { randomBytes, createHmac, createHash, timingSafeEqual } from 'crypto';
 
 const COOKIE_NAME = 'lmcc_session';
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -52,24 +55,30 @@ function pepperConfigured(): boolean {
   return pepperSource() !== 'none';
 }
 
-/* ── Naive per-instance rate limiter (per account+IP) ── */
-const attempts = new Map<string, { count: number; firstAt: number }>();
-const MAX_ATTEMPTS = 8;
-const WINDOW_MS = 10 * 60 * 1000;
+/* ── Invite-code gate for the privileged role ──
 
-function rateLimited(key: string): boolean {
-  const now = Date.now();
-  const entry = attempts.get(key);
-  if (!entry || now - entry.firstAt > WINDOW_MS) {
-    attempts.set(key, { count: 1, firstAt: now });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > MAX_ATTEMPTS;
+   Registration is public, so role self-selection must be validated
+   SERVER-side (the client's role field is untrusted). Officer accounts
+   require a code from OFFICER_INVITE_CODES (comma-separated); with the
+   env unset, officer registration is refused and every new account is
+   a seller — setting the env and sharing the code once is the
+   first-officer path. Codes are hashed before comparison (timing-safe). */
+
+function officerCodesEnabled(): boolean {
+  return Boolean(process.env.OFFICER_INVITE_CODES?.trim());
 }
 
-function resetAttempts(key: string): void {
-  attempts.delete(key);
+function isOfficerCodeValid(code: string): boolean {
+  const codes = (process.env.OFFICER_INVITE_CODES ?? '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean);
+  if (codes.length === 0) return false;
+  const candidate = createHash('sha256').update(code).digest();
+  return codes.some((c) => {
+    const known = createHash('sha256').update(c).digest();
+    return candidate.length === known.length && timingSafeEqual(candidate, known);
+  });
 }
 
 function clientIp(request: NextRequest): string {
@@ -132,7 +141,20 @@ function challengeSalt(email: string): string {
     .slice(0, 32);
 }
 
-/* ── Handlers ── */
+/* ── Rate limiter: durable counters via the auth store (Redis INCR/EXPIRE
+   across instances when configured; file-backed on self-hosted; per-instance
+   memory only as the documented last resort). Mode is surfaced in the GET
+   status response next to `persistent`. */
+const MAX_ATTEMPTS = 8;
+const WINDOW_MS = 10 * 60 * 1000;
+
+async function rateLimited(key: string): Promise<boolean> {
+  return hitRateLimit(key, WINDOW_MS, MAX_ATTEMPTS);
+}
+
+async function resetAttempts(key: string): Promise<void> {
+  await resetRateLimit(key);
+}
 
 export async function POST(request: NextRequest) {
   // Production guardrail: refuse to create/store credentials unprotected.
@@ -179,18 +201,43 @@ export async function POST(request: NextRequest) {
     const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const employeeId = typeof body.employeeId === 'string' ? body.employeeId.trim().slice(0, 40) : '';
-    const role = body.role === 'compliance_officer' ? 'compliance_officer' : body.role === 'seller' ? 'seller' : null;
+    const requestedRole = body.role === 'compliance_officer' ? 'compliance_officer' : body.role === 'seller' ? 'seller' : null;
+    const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
     const verifier = body.verifier;
 
     if (name.length < 2) return NextResponse.json({ error: 'Please enter your full name' }, { status: 400 });
     if (!isValidEmail(email)) return NextResponse.json({ error: 'Enter a valid email address' }, { status: 400 });
-    if (!role) return NextResponse.json({ error: 'Select a role' }, { status: 400 });
+    if (!requestedRole) return NextResponse.json({ error: 'Select a role' }, { status: 400 });
     if (!isValidHex64(verifier)) {
       return NextResponse.json({ error: 'Invalid credential encoding — use a supported browser' }, { status: 400 });
     }
 
+    // SERVER-side privilege gate — the client-submitted role is untrusted.
+    // Data is per-account, so this protects role integrity, not cross-user
+    // data; still, officer status must not be self-claimable.
+    let role: 'seller' | 'compliance_officer';
+    if (requestedRole === 'compliance_officer') {
+      if (!officerCodesEnabled()) {
+        return NextResponse.json(
+          { error: 'Compliance Officer registration is not enabled on this deployment. Register as a Seller, or configure OFFICER_INVITE_CODES.' },
+          { status: 403 }
+        );
+      }
+      if (!inviteCode || !isOfficerCodeValid(inviteCode)) {
+        return NextResponse.json(
+          { error: 'Invalid or missing officer invite code' },
+          { status: 403 }
+        );
+      }
+      role = 'compliance_officer';
+    } else {
+      // Sellers are the public default — a client omitting/claming officer
+      // without a code gets seller regardless.
+      role = 'seller';
+    }
+
     const limiterKey = `register:${emailLookupKey(email)}:${clientIp(request)}`;
-    if (rateLimited(limiterKey)) {
+    if (await rateLimited(limiterKey)) {
       return NextResponse.json({ error: 'Too many attempts. Try again in a few minutes.' }, { status: 429 });
     }
 
@@ -211,13 +258,13 @@ export async function POST(request: NextRequest) {
     };
     await saveAccount(account);
     await indexUserId(userId, account.emailIndex);
-    resetAttempts(limiterKey);
+    await resetAttempts(limiterKey);
     await issueSession(userId, role);
 
     return NextResponse.json({
       authenticated: true,
       user: { name, email, employeeId, role },
-      persistent: isDurableBackend,
+      ...deploymentStatus(),
     });
   }
 
@@ -231,7 +278,7 @@ export async function POST(request: NextRequest) {
     }
 
     const limiterKey = `login:${emailLookupKey(email)}:${clientIp(request)}`;
-    if (rateLimited(limiterKey)) {
+    if (await rateLimited(limiterKey)) {
       return NextResponse.json({ error: 'Too many attempts. Try again in a few minutes.' }, { status: 429 });
     }
 
@@ -242,7 +289,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
-    resetAttempts(limiterKey);
+    await resetAttempts(limiterKey);
     await issueSession(account.id, account.role);
     const pii = decryptAccountPII(account);
 
@@ -265,23 +312,35 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ error: 'Unknown mode' }, { status: 400 });
 }
 
-/* ── GET: current session ── */
+/* ── GET: current session + deployment status ──
+
+   Deployment metadata (persistent / rateLimitMode / officerRegistration)
+   rides on EVERY response shape, including unauthenticated ones — the
+   login screen renders the role picker before any session exists. */
+
+function deploymentStatus() {
+  return {
+    persistent: isDurableBackend,
+    rateLimitMode: rateLimitMode(),
+    officerRegistration: officerCodesEnabled(),
+  };
+}
 
 export async function GET() {
   const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value;
-  if (!token) return NextResponse.json({ authenticated: false });
+  if (!token) return NextResponse.json({ authenticated: false, ...deploymentStatus() });
 
   const session = await getSessionByToken(token);
-  if (!session) return NextResponse.json({ authenticated: false });
+  if (!session) return NextResponse.json({ authenticated: false, ...deploymentStatus() });
 
   const account = await getAccountById(session.userId);
-  if (!account) return NextResponse.json({ authenticated: false });
+  if (!account) return NextResponse.json({ authenticated: false, ...deploymentStatus() });
 
   const pii = decryptAccountPII(account);
   return NextResponse.json({
     authenticated: true,
     user: { ...pii, role: account.role },
-    persistent: isDurableBackend,
+    ...deploymentStatus(),
   });
 }

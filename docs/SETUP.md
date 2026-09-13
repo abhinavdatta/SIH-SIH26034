@@ -124,7 +124,12 @@ choosing a role, full name, employee ID, work email and password:
   Scan History, Product Audit, AI Providers and Settings. Opening a scan
   report, editing a product from Scan History, and exporting PDFs/CSVs all work.
 - **Compliance Officer / Admin** — Everything a Seller has, plus the Review
-  Queue (approve/override OCR results) and the full Legal Reference.
+  Queue (approve/override OCR results) and the full Legal Reference. **Invite
+  only:** officer registration requires a code from the `OFFICER_INVITE_CODES`
+  env var (comma-separated), validated server-side — role self-selection is
+  not possible. With the variable unset, officer sign-up is disabled and
+  every new account is a Seller (role integrity is enforced by the register
+  handler, not the UI). Scan data is strictly per-account for every role.
 
 The same login works from **any device**: accounts, sessions and scans live
 server-side (Upstash Redis when configured; otherwise a durable local store at

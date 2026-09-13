@@ -100,16 +100,25 @@ function loadFileCache(): Record<string, string> {
   return fileCache;
 }
 
-/** Drop expired session entries so the file doesn't grow forever. */
-function purgeExpiredSessions(map: Record<string, string>): void {
+/** Drop expired session and rate-limit entries so the file doesn't grow forever. */
+function purgeExpiredEntries(map: Record<string, string>): void {
   const now = Date.now();
   for (const key of Object.keys(map)) {
-    if (!key.startsWith('lmcc:sess:')) continue;
-    try {
-      const session = JSON.parse(map[key]) as { expiresAt: string };
-      if (new Date(session.expiresAt).getTime() < now) delete map[key];
-    } catch {
-      delete map[key];
+    if (key.startsWith('lmcc:sess:')) {
+      try {
+        const session = JSON.parse(map[key]) as { expiresAt: string };
+        if (new Date(session.expiresAt).getTime() < now) delete map[key];
+      } catch {
+        delete map[key];
+      }
+    } else if (key.startsWith(RATE_LIMIT_PREFIX)) {
+      try {
+        const entry = JSON.parse(map[key]) as { firstAt: number };
+        // Windows are ≤ 10 min in this app; anything older is dead weight.
+        if (now - entry.firstAt > 60 * 60 * 1000) delete map[key];
+      } catch {
+        delete map[key];
+      }
     }
   }
 }
@@ -139,7 +148,7 @@ async function kvGet(key: string): Promise<string | null> {
   }
   if (FILE_BACKEND_ENABLED) {
     const map = loadFileCache();
-    purgeExpiredSessions(map);
+    purgeExpiredEntries(map);
     if (key in map) return map[key];
   }
   return memoryGet(key);
@@ -366,6 +375,59 @@ export async function getAccountById(userId: string): Promise<StoredAccount | nu
 
 export async function indexUserId(userId: string, emailIndex: string): Promise<void> {
   await kvSet(`lmcc:uid:${userId}`, emailIndex);
+}
+
+/* ── Rate limiting (durable when a backend exists) ──
+
+   Fixed-window counters shared across ALL server instances when Redis/KV
+   or the file backend is active; per-instance memory only as a documented
+   last resort (serverless without a configured store). */
+
+export type RateLimitMode = 'redis' | 'file' | 'memory';
+
+export function rateLimitMode(): RateLimitMode {
+  if (isPersistentBackend) return 'redis';
+  return FILE_BACKEND_ENABLED ? 'file' : 'memory';
+}
+
+const RATE_LIMIT_PREFIX = 'lmcc:rl:';
+
+/** Returns true when the caller has EXCEEDED max attempts in the window. */
+export async function hitRateLimit(key: string, windowMs: number, max: number): Promise<boolean> {
+  const rlKey = `${RATE_LIMIT_PREFIX}${key}`;
+
+  if (isPersistentBackend) {
+    // Atomic INCR + first-write EXPIRE — true cross-instance counting.
+    const count = await redisCommand<number>(['INCR', rlKey]);
+    if (count === 1) {
+      await redisCommand(['EXPIRE', rlKey, Math.max(1, Math.ceil(windowMs / 1000))]);
+    }
+    return (count ?? 1) > max;
+  }
+
+  // File/memory counters: same fixed-window semantics as before, but
+  // persisted via the kv layer so restarts don't wipe them.
+  const raw = await kvGet(rlKey);
+  const now = Date.now();
+  let entry: { count: number; firstAt: number } | null = null;
+  if (raw) {
+    try {
+      entry = JSON.parse(raw) as { count: number; firstAt: number };
+    } catch {
+      entry = null;
+    }
+  }
+  if (!entry || now - entry.firstAt > windowMs) {
+    entry = { count: 1, firstAt: now };
+  } else {
+    entry.count += 1;
+  }
+  await kvSet(rlKey, JSON.stringify(entry));
+  return entry.count > max;
+}
+
+export async function resetRateLimit(key: string): Promise<void> {
+  await kvDel(`${RATE_LIMIT_PREFIX}${key}`);
 }
 
 /* ── Scan storage (cross-device) ── */

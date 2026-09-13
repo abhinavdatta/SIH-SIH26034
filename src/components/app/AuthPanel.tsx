@@ -9,7 +9,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Shield, Loader2, Mail, Lock, User, BadgeCheck, AlertCircle, Store, ShieldCheck, Check } from 'lucide-react';
+import { Shield, Loader2, Mail, Lock, User, BadgeCheck, AlertCircle, Store, ShieldCheck, Check, KeyRound } from 'lucide-react';
 import { useAuth, ROLE_LABELS, type UserRole, validatePassword } from '@/lib/auth';
 import { WATERMARK_LINE } from '@/lib/auth';
 
@@ -21,12 +21,13 @@ const ROLE_OPTIONS: { value: UserRole; icon: React.ReactNode; blurb: string }[] 
 ];
 
 export default function AuthPanel() {
-  const { signIn, signUp, persistent, hydrated } = useAuth();
+  const { signIn, signUp, persistent, hydrated, officerRegistration } = useAuth();
   const [mode, setMode] = useState<Mode>('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [role, setRole] = useState<UserRole>('seller');
+  const [inviteCode, setInviteCode] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -39,13 +40,16 @@ export default function AuthPanel() {
       if (name.trim().length < 2) return setError('Please enter your full name');
       const pw = validatePassword(password);
       if (pw) return setError(pw);
+      if (role === 'compliance_officer' && !inviteCode.trim()) {
+        return setError('An invite code is required to register as a Compliance Officer');
+      }
     }
 
     setBusy(true);
     try {
       const result =
         mode === 'signup'
-          ? await signUp({ name, email, employeeId, role, password })
+          ? await signUp({ name, email, employeeId, role, inviteCode, password })
           : await signIn(email, password);
       if (!result.ok) setError(result.error ?? 'Something went wrong');
     } finally {
@@ -103,41 +107,64 @@ export default function AuthPanel() {
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             {mode === 'signup' && (
               <>
-                {/* Role picker */}
+                {/* Role picker — officer requires an invite code (validated
+                    server-side; the client hint is convenience only). */}
                 <div>
                   <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
                     I am signing up as <span style={{ color: 'var(--danger)' }}>*</span>
                   </p>
                   <div className="space-y-2">
-                    {ROLE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => setRole(option.value)}
-                        className={`w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] border-2 text-left transition-colors cursor-pointer ${
-                          role === option.value ? 'border-[var(--primary)]' : 'border-[var(--border-default)]'
-                        }`}
-                        style={role === option.value ? { background: 'var(--primary-light)' } : undefined}
-                        aria-pressed={role === option.value}
-                      >
-                        <span style={{ color: role === option.value ? 'var(--primary)' : 'var(--text-muted)' }}>
-                          {option.icon}
-                        </span>
-                        <span className="flex-1 min-w-0">
-                          <span className="block text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-                            {ROLE_LABELS[option.value]}
+                    {ROLE_OPTIONS.map((option) => {
+                      const disabled = option.value === 'compliance_officer' && !officerRegistration && hydrated;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setRole(option.value)}
+                          disabled={disabled}
+                          title={disabled ? 'Officer registration is not enabled on this deployment' : undefined}
+                          className={`w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] border-2 text-left transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                            role === option.value ? 'border-[var(--primary)]' : 'border-[var(--border-default)]'
+                          }`}
+                          style={role === option.value ? { background: 'var(--primary-light)' } : undefined}
+                          aria-pressed={role === option.value}
+                        >
+                          <span style={{ color: role === option.value ? 'var(--primary)' : 'var(--text-muted)' }}>
+                            {option.icon}
                           </span>
-                          <span className="block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                            {option.blurb}
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+                              {ROLE_LABELS[option.value]}
+                            </span>
+                            <span className="block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                              {option.value === 'compliance_officer' && !officerRegistration && hydrated
+                                ? 'Invite-only on this deployment — disabled'
+                                : option.blurb}
+                            </span>
                           </span>
-                        </span>
-                        {role === option.value && (
-                          <Check className="h-4 w-4 shrink-0" style={{ color: 'var(--primary)' }} />
-                        )}
-                      </button>
-                    ))}
+                          {role === option.value && (
+                            <Check className="h-4 w-4 shrink-0" style={{ color: 'var(--primary)' }} />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {role === 'compliance_officer' && officerRegistration && (
+                  <div className="relative">
+                    <KeyRound className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} aria-hidden="true" />
+                    <input
+                      type="password"
+                      placeholder="Officer invite code"
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      className={inputClass}
+                      autoComplete="off"
+                      aria-label="Officer invite code"
+                    />
+                  </div>
+                )}
 
                 <div className="relative">
                   <User className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} aria-hidden="true" />

@@ -40,6 +40,8 @@ export interface RegisterRequest {
   email: string;
   employeeId: string;
   role: 'seller' | 'compliance_officer';
+  /** Required server-side when role is compliance_officer (OFFICER_INVITE_CODES). */
+  inviteCode?: string;
   /** PBKDF2-derived verifier — raw password is never sent. */
   verifier: string;
 }
@@ -60,6 +62,7 @@ export async function prepareRegister(input: {
   email: string;
   employeeId: string;
   role: 'seller' | 'compliance_officer';
+  inviteCode?: string;
   password: string;
 }): Promise<RegisterRequest> {
   const res = await fetch('/api/auth', {
@@ -76,6 +79,7 @@ export async function prepareRegister(input: {
     email: input.email.trim().toLowerCase(),
     employeeId: input.employeeId.trim(),
     role: input.role,
+    inviteCode: input.inviteCode?.trim() || undefined,
     verifier,
   };
 }

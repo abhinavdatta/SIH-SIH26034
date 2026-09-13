@@ -34,11 +34,13 @@ export interface AuthState {
   hydrated: boolean;
   /** Server reports a persistent backend (cross-device accounts ready). */
   persistent: boolean;
+  /** Officer sign-up is possible on this deployment (invite codes configured server-side). */
+  officerRegistration: boolean;
 }
 
 interface AuthContextValue extends AuthState {
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  signUp: (input: { name: string; email: string; employeeId: string; role: UserRole; password: string }) => Promise<{ ok: boolean; error?: string }>;
+  signUp: (input: { name: string; email: string; employeeId: string; role: UserRole; inviteCode?: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -85,6 +87,8 @@ interface SessionResponse {
   authenticated: boolean;
   user?: AuthUser;
   persistent?: boolean;
+  /** Whether officer registration is open on this deployment (invite codes configured). */
+  officerRegistration?: boolean;
   error?: string;
 }
 
@@ -106,7 +110,12 @@ export function validatePassword(password: string): string | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({ user: null, hydrated: false, persistent: false });
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    hydrated: false,
+    persistent: false,
+    officerRegistration: false,
+  });
 
   const applySession = useMemo(
     () => (data: SessionResponse) => {
@@ -115,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: currentUser,
         hydrated: true,
         persistent: Boolean(data.persistent),
+        officerRegistration: Boolean(data.officerRegistration),
       });
     },
     []
@@ -136,6 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: currentUser,
         hydrated: true,
         persistent: Boolean(data.persistent),
+        officerRegistration: Boolean(data.officerRegistration),
       });
     });
     // Legacy local-account cleanup (pre-server auth) — remove stale keys.
@@ -230,7 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Best effort
         }
         currentUser = null;
-        setState({ user: null, hydrated: true, persistent: state.persistent });
+        setState({ user: null, hydrated: true, persistent: state.persistent, officerRegistration: state.officerRegistration });
       },
     }),
     [state, applySession, refresh]
