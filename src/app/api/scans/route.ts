@@ -17,7 +17,7 @@ import {
   getSessionByToken,
   saveUserScans,
   getUserScans,
-  isPersistentBackend,
+  isDurableBackend,
 } from '@/lib/server/auth-store';
 
 const COOKIE_NAME = 'lmcc_session';
@@ -43,7 +43,7 @@ export async function GET() {
       scans = [];
     }
   }
-  return NextResponse.json({ authenticated: true, scans, persistent: isPersistentBackend });
+  return NextResponse.json({ authenticated: true, scans, persistent: isDurableBackend });
 }
 
 export async function POST(request: NextRequest) {

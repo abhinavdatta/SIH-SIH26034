@@ -81,6 +81,22 @@ export default function ComplianceReportView() {
     const stamp = getExportStampShort();
     const lastY = () => (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 40;
 
+    /** Draw a section heading, page-breaking first when it would orphan
+        near the page bottom (heading + table head + ≥1 row must fit). */
+    const drawHeading = (text: string, afterY: number, bold = true): number => {
+      let y = afterY + 9;
+      if (y > pageHeight - 48) {
+        doc.addPage();
+        y = 30; // below the continuation band drawn later
+      }
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setFontSize(bold ? 11 : 9.5);
+      doc.setTextColor(...(bold ? [15, 23, 42] : [4, 120, 87]) as [number, number, number]);
+      doc.text(text, M, y);
+      doc.setTextColor(0);
+      return y + 5; // table startY just below the heading
+    };
+
     doc.setProperties({
       title: `Compliance Report — ${scan.productName}`,
       subject: 'Legal Metrology (Packaged Commodities) Rules, 2011',
@@ -126,13 +142,8 @@ export default function ComplianceReportView() {
     });
 
     /* ── Field compliance table ── */
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(15, 23, 42);
-    doc.text('Field compliance details', M, lastY() + 9);
-
     autoTable(doc, {
-      startY: lastY() + 12,
+      startY: drawHeading('Field compliance details', lastY()),
       margin: { left: M, right: M, top: 30 },
       theme: 'grid',
       head: [['Field', 'Extracted value', 'Status', 'Conf.', 'Rule']],
@@ -183,13 +194,9 @@ export default function ComplianceReportView() {
 
     /* ── Violations table ── */
     const activeViolations = scan.violations.filter((v) => !v.isOverridden);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(15, 23, 42);
     if (scan.violations.length > 0) {
-      doc.text(`Violations (${activeViolations.length} active of ${scan.violations.length})`, M, lastY() + 9);
       autoTable(doc, {
-        startY: lastY() + 12,
+        startY: drawHeading(`Violations (${activeViolations.length} active of ${scan.violations.length})`, lastY()),
         margin: { left: M, right: M, top: 30 },
         theme: 'grid',
         head: [['#', 'Severity', 'Type', 'Description']],
@@ -233,11 +240,7 @@ export default function ComplianceReportView() {
         },
       });
     } else {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9.5);
-      doc.setTextColor(4, 120, 87);
-      doc.text('No violations detected — all fields reviewed and compliant.', M, lastY() + 9);
-      doc.setTextColor(0);
+      drawHeading('No violations detected — all fields reviewed and compliant.', lastY(), false);
     }
 
     /* ── Page furniture: continuation band + footer on every page ── */

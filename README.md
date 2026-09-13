@@ -144,9 +144,9 @@ from `training/images/` or audit a product manually.
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 # ── Accounts & cross-device sync (optional but recommended) ──
-# Free tier: upstash.com → Redis → REST API credentials.
-# Without these, accounts/scans fall back to an in-memory server store
-# and the UI discloses that login won't persist across restarts.
+# Free tier: upstash.com → Redis → REST credentials.
+# Without these, accounts still SURVIVE restarts via a local .data/ store
+# (per-server); set Upstash to share logins across different machines.
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 

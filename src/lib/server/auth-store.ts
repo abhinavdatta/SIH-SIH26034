@@ -23,6 +23,8 @@
 
 import 'server-only';
 import { scryptSync, randomBytes, createHmac, createCipheriv, createDecipheriv, createHash, timingSafeEqual } from 'crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /* ── Backend selection ── */
 
@@ -46,7 +48,7 @@ async function redisCommand<T = unknown>(command: (string | number)[]): Promise<
   return json.result;
 }
 
-/* ── In-memory fallback (dev only) ── */
+/* ── In-memory fallback (last resort) ── */
 
 const memory = new Map<string, string>();
 async function memoryGet(key: string): Promise<string | null> {
@@ -59,12 +61,78 @@ async function memoryDel(key: string): Promise<void> {
   memory.delete(key);
 }
 
+/* ── File-backed fallback (durable across server restarts) ──
+
+   When Upstash isn't configured, accounts/sessions/scans persist to
+   .data/auth-kv.json on the server machine. This fixes the "login is
+   forgotten on refresh/restart" problem for local dev and any
+   self-hosted Node deployment WITHOUT any env setup.
+
+   Disabled on Vercel (serverless filesystems are ephemeral/read-only)
+   — there, real durability requires UPSTASH_* env vars. */
+
+const FILE_BACKEND_ENABLED = !process.env.VERCEL;
+/** True when accounts survive a server restart (Redis OR file-backed). */
+export const isDurableBackend = isPersistentBackend || FILE_BACKEND_ENABLED;
+
+const DATA_DIR = path.join(process.cwd(), '.data');
+const DATA_FILE = path.join(DATA_DIR, 'auth-kv.json');
+
+let fileCache: Record<string, string> | null = null;
+let flushScheduled = false;
+
+function loadFileCache(): Record<string, string> {
+  if (fileCache) return fileCache;
+  fileCache = {};
+  try {
+    fileCache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as Record<string, string>;
+  } catch {
+    // First run or unreadable file → start empty; memory stays authoritative.
+  }
+  return fileCache;
+}
+
+/** Drop expired session entries so the file doesn't grow forever. */
+function purgeExpiredSessions(map: Record<string, string>): void {
+  const now = Date.now();
+  for (const key of Object.keys(map)) {
+    if (!key.startsWith('lmcc:sess:')) continue;
+    try {
+      const session = JSON.parse(map[key]) as { expiresAt: string };
+      if (new Date(session.expiresAt).getTime() < now) delete map[key];
+    } catch {
+      delete map[key];
+    }
+  }
+}
+
+function scheduleFlush(): void {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  setTimeout(() => {
+    flushScheduled = false;
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = `${DATA_FILE}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(loadFileCache()));
+      fs.renameSync(tmp, DATA_FILE); // atomic swap
+    } catch {
+      // Read-only FS (e.g. some hosts) → memory still works for this instance.
+    }
+  }, 25);
+}
+
 /* ── Generic KV ops ── */
 
 async function kvGet(key: string): Promise<string | null> {
   if (isPersistentBackend) {
     const v = await redisCommand<string>(['GET', key]);
     return v ?? null;
+  }
+  if (FILE_BACKEND_ENABLED) {
+    const map = loadFileCache();
+    purgeExpiredSessions(map);
+    if (key in map) return map[key];
   }
   return memoryGet(key);
 }
@@ -74,6 +142,10 @@ async function kvSet(key: string, value: string): Promise<void> {
     await redisCommand(['SET', key, value]);
     return;
   }
+  if (FILE_BACKEND_ENABLED) {
+    loadFileCache()[key] = value;
+    scheduleFlush();
+  }
   await memorySet(key, value);
 }
 
@@ -82,19 +154,60 @@ async function kvDel(key: string): Promise<void> {
     await redisCommand(['DEL', key]);
     return;
   }
+  if (FILE_BACKEND_ENABLED) {
+    delete loadFileCache()[key];
+    scheduleFlush();
+  }
   await memoryDel(key);
 }
 
 /* ── Secrets ── */
 
+let cachedPepper: Buffer | null = null;
+
+/**
+ * Pepper used for AES-GCM PII encryption + HMAC email indexes.
+ * Priority: AUTH_PEPPER env → persisted auto-generated secret (.data/pepper.secret)
+ * → dev fallback constant. Cached per process. The generated file keeps PII
+ * decryptable across restarts when no env is configured; env is still the
+ * recommended production setup (see .env.example).
+ */
 function getPepper(): Buffer {
+  if (cachedPepper) return cachedPepper;
   const raw = process.env.AUTH_PEPPER;
   if (raw && raw.length >= 16) {
-    return createHash('sha256').update(raw).digest(); // 32 bytes
+    cachedPepper = createHash('sha256').update(raw).digest(); // 32 bytes
+    return cachedPepper;
+  }
+  if (FILE_BACKEND_ENABLED) {
+    try {
+      const secretFile = path.join(DATA_DIR, 'pepper.secret');
+      let secret = '';
+      try {
+        secret = fs.readFileSync(secretFile, 'utf8').trim();
+      } catch {
+        // First boot — generate below.
+      }
+      if (secret.length < 32) {
+        secret = randomBytes(32).toString('hex');
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(secretFile, secret, { mode: 0o600 });
+        console.warn(
+          '[LMCC auth] AUTH_PEPPER not set — generated a server secret at .data/pepper.secret. ' +
+            'Set AUTH_PEPPER in the environment for real deployments (see .env.example).'
+        );
+      }
+      cachedPepper = createHash('sha256').update(secret).digest();
+      return cachedPepper;
+    } catch {
+      // Read-only FS → fall through to dev constant (memory still works).
+    }
   }
   // Dev-only deterministic key so local flows work without env setup.
-  // Production MUST set AUTH_PEPPER (checked in the auth route).
-  return createHash('sha256').update('lmcc-dev-pepper-do-not-use-in-prod').digest();
+  // Deployments without AUTH_PEPPER and without a writable FS fail closed
+  // (checked in the auth route).
+  cachedPepper = createHash('sha256').update('lmcc-dev-pepper-do-not-use-in-prod').digest();
+  return cachedPepper;
 }
 
 /* ── PII envelope encryption (AES-256-GCM) ── */
@@ -135,9 +248,14 @@ export function hashVerifier(clientVerifier: string, salt?: string): { hash: str
 export function verifyVerifier(clientVerifier: string, stored: string): boolean {
   const parts = stored.split('$');
   if (parts.length !== 3 || parts[0] !== 's1') return false;
-  const { hash } = hashVerifier(clientVerifier, parts[1]);
-  const a = Buffer.from(hash);
-  const b = Buffer.from(parts[2]);
+  const [, salt, storedHash] = parts;
+  // Recompute ONLY the digest (hashVerifier's return includes the
+  // s1$salt$ prefix — comparing that whole string against storedHash
+  // could never match, which made every login fail). Same params as
+  // hashVerifier is what guarantees an apples-to-apples digest.
+  const recomputed = scryptSync(clientVerifier, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+  const a = Buffer.from(recomputed);
+  const b = Buffer.from(storedHash);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
@@ -188,10 +306,13 @@ export function newSessionToken(): string {
 }
 
 export async function saveSession(token: string, session: ServerSession): Promise<void> {
-  await kvSet(`lmcc:sess:${token}`, JSON.stringify(session));
+  const ttlSec = Math.floor(SESSION_TTL_MS / 1000);
   if (isPersistentBackend) {
-    await redisCommand(['EXPIRE', `lmcc:sess:${token}`, Math.floor(SESSION_TTL_MS / 1000)]);
+    // Single SET with EX — atomic, no TTL race between SET and EXPIRE.
+    await redisCommand(['SET', `lmcc:sess:${token}`, JSON.stringify(session), 'EX', ttlSec]);
+    return;
   }
+  await kvSet(`lmcc:sess:${token}`, JSON.stringify(session));
 }
 
 export async function getSessionByToken(token: string): Promise<ServerSession | null> {

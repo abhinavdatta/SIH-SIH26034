@@ -50,8 +50,10 @@ Create a `.env` file in the root directory:
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 # ── Accounts & cross-device sync (optional but recommended) ──
-# Without these the app still runs; accounts/scans then live only in the
-# browser (in-memory server fallback) and the UI says so honestly.
+# Without these, accounts/scans persist on the SERVER MACHINE in
+# .data/auth-kv.json — logins survive restarts, but they are tied to
+# that one server instance. Set Upstash to share accounts across
+# devices/regions ("login from anywhere").
 # Free tier: upstash.com → Redis → REST API credentials.
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
@@ -125,7 +127,9 @@ choosing a role, full name, employee ID, work email and password:
   Queue (approve/override OCR results) and the full Legal Reference.
 
 The same login works from **any device**: accounts, sessions and scans live
-server-side (Upstash Redis when configured). On sign-in the server's scan
+server-side (Upstash Redis when configured; otherwise a durable local store at
+`.data/auth-kv.json` — restarts keep logins, but accounts are per-server).
+On sign-in the server's scan
 snapshot is merged into the browser; every data change pushes back up.
 Signing out on a shared computer clears the local scan cache — the account
  copy is untouched and re-hydrates at the next sign-in.

@@ -10,6 +10,7 @@ build/
 dist/
 
 # ── Environment & secrets ──
+.data/
 .env
 .env.local
 .env.development.local

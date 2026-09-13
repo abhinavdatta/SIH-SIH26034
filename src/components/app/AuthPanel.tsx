@@ -21,7 +21,7 @@ const ROLE_OPTIONS: { value: UserRole; icon: React.ReactNode; blurb: string }[] 
 ];
 
 export default function AuthPanel() {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, persistent, hydrated } = useAuth();
   const [mode, setMode] = useState<Mode>('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -219,7 +219,14 @@ export default function AuthPanel() {
         </div>
 
         <p className="text-center text-[10px] mt-4" style={{ color: 'var(--text-muted)' }}>
-          Same login works on any device. ·{' '}
+          {hydrated && !persistent ? (
+            <span style={{ color: 'var(--warning, #d97706)' }}>
+              Server storage: local file (accounts survive restarts on this machine). For
+              login-from-anywhere across devices, set UPSTASH_REDIS_REST_URL + TOKEN — see .env.example.
+            </span>
+          ) : (
+            'Same login works on any device.'
+          )}{' '}
           <a
             href={`https://${WATERMARK_LINE}`}
             target="_blank"

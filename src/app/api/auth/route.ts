@@ -23,7 +23,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import 'server-only';
 import {
-  isPersistentBackend,
+  isDurableBackend,
   getAccount,
   saveAccount,
   hashVerifier,
@@ -45,9 +45,13 @@ const COOKIE_NAME = 'lmcc_session';
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-/* ── Fail closed: production requires a real pepper ── */
+/* ── Fail closed: production requires a real pepper (env or a persisted
+   server-generated secret on a durable filesystem). ── */
 function pepperConfigured(): boolean {
-  return Boolean(process.env.AUTH_PEPPER && process.env.AUTH_PEPPER.length >= 16);
+  if (process.env.AUTH_PEPPER && process.env.AUTH_PEPPER.length >= 16) return true;
+  // Auto-generated .data/pepper.secret keeps local/self-hosted production
+  // runs working without env setup; serverless (Vercel) has no durable FS.
+  return isDurableBackend;
 }
 
 /* ── Naive per-instance rate limiter (per account+IP) ── */
@@ -122,6 +126,14 @@ function isValidHex64(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
+/** Deterministic per-account PBKDF2 salt — MUST stay stable forever. */
+function challengeSalt(email: string): string {
+  return createHmac('sha256', process.env.AUTH_PEPPER || 'lmcc-dev-pepper-do-not-use-in-prod')
+    .update(`challenge:${email}`)
+    .digest('hex')
+    .slice(0, 32);
+}
+
 /* ── Handlers ── */
 
 export async function POST(request: NextRequest) {
@@ -142,26 +154,22 @@ export async function POST(request: NextRequest) {
 
   const mode = body.mode;
 
-  /* ── challenge: return PBKDF2 salt (decoy for unknown accounts) ── */
+  /* ── challenge: return the account's PBKDF2 salt ──
+
+     The salt is a deterministic HMAC(email, server secret): identical at
+     registration and at every later login (the client must derive the SAME
+     verifier both times), stable in shape whether or not the account exists
+     (anti-enumeration), and unforgeable without AUTH_PEPPER. It must be a
+     pure function of the email — deriving it from the stored scrypt hash
+     (as an earlier revision did) broke login permanently, because the
+     register-time verifier used the challenge salt, not the scrypt salt. */
   if (mode === 'challenge') {
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     if (!isValidEmail(email)) {
-      // Shape-stable response; the real check happens at login/register.
+      // Shape-stable random response; the real check happens at login/register.
       return NextResponse.json({ salt: randomBytes(16).toString('hex') });
     }
-    const account = await getAccount(email);
-    if (account) {
-      // Salt is stored inside the scrypt hash (s1$salt$hash).
-      const salt = account.passwordHash.split('$')[1] ?? '';
-      if (salt) return NextResponse.json({ salt });
-    }
-    // Decoy: deterministic salt so response shape never reveals whether
-    // the account exists (prevents account enumeration).
-    const decoy = createHmac('sha256', process.env.AUTH_PEPPER || 'lmcc-dev-pepper-do-not-use-in-prod')
-      .update(`challenge:${email}`)
-      .digest('hex')
-      .slice(0, 32);
-    return NextResponse.json({ salt: decoy });
+    return NextResponse.json({ salt: challengeSalt(email) });
   }
 
   /* ── register ── */
@@ -207,7 +215,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       authenticated: true,
       user: { name, email, employeeId, role },
-      persistent: isPersistentBackend,
+      persistent: isDurableBackend,
     });
   }
 
@@ -239,7 +247,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       authenticated: true,
       user: { ...pii, role: account.role },
-      persistent: isPersistentBackend,
+      persistent: isDurableBackend,
     });
   }
 
@@ -272,6 +280,6 @@ export async function GET() {
   return NextResponse.json({
     authenticated: true,
     user: { ...pii, role: account.role },
-    persistent: isPersistentBackend,
+    persistent: isDurableBackend,
   });
 }
