@@ -29,6 +29,10 @@ yarn-error.log*
 *.tsbuildinfo
 .turbo/
 
+# ── Large binaries that don't belong in git ──
+*.zip
+public/samples/*
+
 # ── Testing / coverage ──
 coverage/
 
