@@ -2,13 +2,16 @@
 // Server-side credential & data store (API routes only — never
 // imported from client components).
 //
-// BACKENDS
-//  - Upstash Redis (REST) when UPSTASH_REDIS_REST_URL + TOKEN are set
-//    → accounts and scans work across devices/browsers.
-//  - Fallback: in-memory Map (dev only). Data resets on server restart;
-//    cross-device login is unavailable and the UI says so honestly.
+// BACKENDS (priority order)
+//  1. Supabase Postgres — SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+//     (+ schema from supabase/migrations/0001_lmcc_auth.sql). Real
+//     relational store; recommended production backend.
+//  2. Upstash Redis (REST) — UPSTASH_REDIS_REST_URL + TOKEN, or the
+//     Vercel Marketplace KV aliases (KV_REST_API_URL/TOKEN).
+//  3. Durable local file (.data/auth-kv.json) on non-serverless hosts.
+//  4. In-memory Map (last resort — survives only within one process).
 //
-// NEVER-PLAINTEXT GUARANTEES
+// NEVER-PLAINTEXT GUARANTEES (identical on every backend)
 //  - passwordVerifier: PBKDF2-SHA256(150k) derived on the CLIENT from
 //    the raw password — the raw password never reaches the server.
 //    Re-hashed server-side with scrypt before storage (defense in depth:
@@ -16,7 +19,7 @@
 //  - PII (name, email, employeeId): AES-256-GCM encrypted with a key
 //    derived from AUTH_PEPPER (server secret). A database dump without
 //    the env secret reveals no user PII. Lookup by HMAC-SHA256(email).
-//  - AUTH_PEPPER must be set in production (32+ random chars).
+//  - Session cookies are stored hashed (sha256) on SQL backends.
 //
 // Repo: github.com/abhinavdatta
 // ═══════════════════════════════════════════════════════════════
@@ -25,20 +28,41 @@ import 'server-only';
 import { scryptSync, randomBytes, createHmac, createCipheriv, createDecipheriv, createHash, timingSafeEqual } from 'crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  isSupabaseBackend,
+  sbGetAccountByEmailIndex,
+  sbSaveAccount,
+  sbGetAccountById,
+  sbSaveSession,
+  sbGetSession,
+  sbDeleteSession,
+  sbGetUserScans,
+  sbSaveUserScans,
+  sbHitRateLimit,
+  sbResetRateLimit,
+  type StoredAccount,
+} from './supabase-store';
 
 /* ── Backend selection ──
 
-   Supported, in priority order:
-   1. UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN  (direct Upstash)
-   2. KV_REST_API_URL / KV_REST_API_TOKEN  (Vercel Marketplace KV —
-      auto-injected when you create a KV store in the Vercel dashboard,
-      zero manual env typing)
+   1. Supabase Postgres  (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)
+   2. Upstash / Vercel KV (UPSTASH_* or KV_* REST vars)
    3. Durable local file (.data/auth-kv.json) on non-serverless hosts
    4. In-memory Map (last resort — survives only within one process) */
 
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
-export const isPersistentBackend = Boolean(UPSTASH_URL && UPSTASH_TOKEN);
+const isRedisBackend = Boolean(UPSTASH_URL && UPSTASH_TOKEN);
+
+/** True when a durable backend is active (Supabase, Redis/KV, or file). */
+export const isPersistentBackend = isSupabaseBackend || isRedisBackend;
+
+/** Human-readable backend name for status surfaces. */
+export function backendName(): 'supabase' | 'redis' | 'file' | 'memory' {
+  if (isSupabaseBackend) return 'supabase';
+  if (isRedisBackend) return 'redis';
+  return FILE_BACKEND_ENABLED ? 'file' : 'memory';
+}
 
 async function redisCommand<T = unknown>(command: (string | number)[]): Promise<T | null> {
   if (!isPersistentBackend) return null;
@@ -178,6 +202,12 @@ async function kvDel(key: string): Promise<void> {
   await memoryDel(key);
 }
 
+/* ── Helpers ── */
+
+function sha256b64url(value: string): string {
+  return createHash('sha256').update(value).digest('base64url');
+}
+
 /* ── Secrets ── */
 
 let cachedPepper: Buffer | null = null;
@@ -285,23 +315,16 @@ export function verifyVerifier(clientVerifier: string, stored: string): boolean 
 
 /* ── Records ── */
 
-export interface StoredAccount {
-  id: string;
-  /** HMAC of the lowercase email — allows lookup without storing the email. */
-  emailIndex: string;
-  /** AES-GCM envelope: JSON { name, email, employeeId }. */
-  pii: string;
-  role: 'seller' | 'compliance_officer';
-  passwordHash: string; // scrypt(clientVerifier)
-  createdAt: string;
-}
+export type { StoredAccount } from './supabase-store';
 
 export function accountKey(emailIndex: string): string {
   return `lmcc:acct:${emailIndex}`;
 }
 
 export async function getAccount(email: string): Promise<StoredAccount | null> {
-  const raw = await kvGet(accountKey(emailLookupKey(email)));
+  const idx = emailLookupKey(email);
+  if (isSupabaseBackend) return sbGetAccountByEmailIndex(idx);
+  const raw = await kvGet(accountKey(idx));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as StoredAccount;
@@ -311,6 +334,10 @@ export async function getAccount(email: string): Promise<StoredAccount | null> {
 }
 
 export async function saveAccount(account: StoredAccount): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbSaveAccount(account);
+    return;
+  }
   await kvSet(accountKey(account.emailIndex), JSON.stringify(account));
 }
 
@@ -330,8 +357,18 @@ export function newSessionToken(): string {
 }
 
 export async function saveSession(token: string, session: ServerSession): Promise<void> {
+  if (isSupabaseBackend) {
+    // Token is stored HASHED — a DB dump cannot resurrect session cookies.
+    await sbSaveSession(sha256b64url(token), {
+      userId: session.userId,
+      role: session.role,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+    });
+    return;
+  }
   const ttlSec = Math.floor(SESSION_TTL_MS / 1000);
-  if (isPersistentBackend) {
+  if (isRedisBackend) {
     // Single SET with EX — atomic, no TTL race between SET and EXPIRE.
     await redisCommand(['SET', `lmcc:sess:${token}`, JSON.stringify(session), 'EX', ttlSec]);
     return;
@@ -340,6 +377,15 @@ export async function saveSession(token: string, session: ServerSession): Promis
 }
 
 export async function getSessionByToken(token: string): Promise<ServerSession | null> {
+  if (isSupabaseBackend) {
+    const stored = await sbGetSession(sha256b64url(token));
+    if (!stored) return null;
+    if (new Date(stored.expiresAt).getTime() < Date.now()) {
+      await sbDeleteSession(sha256b64url(token));
+      return null;
+    }
+    return stored;
+  }
   const raw = await kvGet(`lmcc:sess:${token}`);
   if (!raw) return null;
   try {
@@ -355,13 +401,17 @@ export async function getSessionByToken(token: string): Promise<ServerSession | 
 }
 
 export async function deleteSession(token: string): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbDeleteSession(sha256b64url(token));
+    return;
+  }
   await kvDel(`lmcc:sess:${token}`);
 }
 
 /** Load the PII envelope for a session's user (for export stamps). */
 export async function getAccountById(userId: string): Promise<StoredAccount | null> {
-  // Sessions store the emailIndex indirectly via the account id scan.
-  // To avoid a full scan we also index id → emailIndex at signup.
+  if (isSupabaseBackend) return sbGetAccountById(userId);
+  // Redis/file: sessions store the emailIndex indirectly via an id index.
   const raw = await kvGet(`lmcc:uid:${userId}`);
   if (!raw) return null;
   const account = await kvGet(accountKey(raw));
@@ -374,6 +424,9 @@ export async function getAccountById(userId: string): Promise<StoredAccount | nu
 }
 
 export async function indexUserId(userId: string, emailIndex: string): Promise<void> {
+  // SQL backends look accounts up by id directly; the id→emailIndex map
+  // is only needed by the KV-style backends.
+  if (isSupabaseBackend) return;
   await kvSet(`lmcc:uid:${userId}`, emailIndex);
 }
 
@@ -383,10 +436,11 @@ export async function indexUserId(userId: string, emailIndex: string): Promise<v
    or the file backend is active; per-instance memory only as a documented
    last resort (serverless without a configured store). */
 
-export type RateLimitMode = 'redis' | 'file' | 'memory';
+export type RateLimitMode = 'supabase' | 'redis' | 'file' | 'memory';
 
 export function rateLimitMode(): RateLimitMode {
-  if (isPersistentBackend) return 'redis';
+  if (isSupabaseBackend) return 'supabase';
+  if (isRedisBackend) return 'redis';
   return FILE_BACKEND_ENABLED ? 'file' : 'memory';
 }
 
@@ -396,7 +450,12 @@ const RATE_LIMIT_PREFIX = 'lmcc:rl:';
 export async function hitRateLimit(key: string, windowMs: number, max: number): Promise<boolean> {
   const rlKey = `${RATE_LIMIT_PREFIX}${key}`;
 
-  if (isPersistentBackend) {
+  if (isSupabaseBackend) {
+    // Atomic RPC in Postgres — single statement, no cross-instance race.
+    return sbHitRateLimit(rlKey, windowMs, max);
+  }
+
+  if (isRedisBackend) {
     // Atomic INCR + first-write EXPIRE — true cross-instance counting.
     const count = await redisCommand<number>(['INCR', rlKey]);
     if (count === 1) {
@@ -427,15 +486,28 @@ export async function hitRateLimit(key: string, windowMs: number, max: number): 
 }
 
 export async function resetRateLimit(key: string): Promise<void> {
-  await kvDel(`${RATE_LIMIT_PREFIX}${key}`);
+  await resetRateLimitBackend(`${RATE_LIMIT_PREFIX}${key}`);
+}
+
+async function resetRateLimitBackend(rlKey: string): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbResetRateLimit(rlKey);
+    return;
+  }
+  await kvDel(rlKey);
 }
 
 /* ── Scan storage (cross-device) ── */
 
 export async function saveUserScans(userId: string, scansJson: string): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbSaveUserScans(userId, scansJson);
+    return;
+  }
   await kvSet(`lmcc:scans:${userId}`, scansJson);
 }
 
 export async function getUserScans(userId: string): Promise<string | null> {
+  if (isSupabaseBackend) return sbGetUserScans(userId);
   return kvGet(`lmcc:scans:${userId}`);
 }

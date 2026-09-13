@@ -43,26 +43,28 @@ pnpm install
 
 ### 3. Configure Environment Variables
 
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory (mirror the same values in
+Vercel → Settings → Environment Variables for deployments):
 
 ```env
-# Application URL
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+# ── RECOMMENDED: Supabase Postgres (accounts/sessions/scans) ──
+# 1. Run supabase/migrations/0001_lmcc_auth.sql once (SQL Editor)
+# 2. Project Settings → API → Project URL + service_role secret
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
 
-# ── Accounts & cross-device sync (optional but recommended) ──
-# Without these, accounts/scans persist on the SERVER MACHINE in
-# .data/auth-kv.json — logins survive restarts, but they are tied to
-# that one server instance. Set Upstash to share accounts across
-# devices/regions ("login from anywhere").
-# Free tier: upstash.com → Redis → REST API credentials.
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
-
-# Server-side pepper used to encrypt user PII (name/email/employee ID)
+# Server-side pepper: encrypts user PII (name/email/employee ID)
 # and to HMAC email lookup keys. Generate with:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 AUTH_PEPPER=
+
+# Officer invite codes (comma-separated) — unset = officer sign-up disabled
+OFFICER_INVITE_CODES=
 ```
+
+Fallback chain when Supabase is absent: Upstash Redis / Vercel KV →
+local `.data/auth-kv.json` (self-hosted only) → in-memory. See
+`.env.example` for every option.
 
 Note: AI provider API keys are configured via the UI after installation, not in `.env`.
 

@@ -24,6 +24,7 @@ import { cookies } from 'next/headers';
 import 'server-only';
 import {
   isDurableBackend,
+  backendName,
   pepperSource,
   rateLimitMode,
   hitRateLimit,
@@ -321,6 +322,7 @@ export async function POST(request: NextRequest) {
 function deploymentStatus() {
   return {
     persistent: isDurableBackend,
+    backend: backendName(),
     rateLimitMode: rateLimitMode(),
     officerRegistration: officerCodesEnabled(),
   };
