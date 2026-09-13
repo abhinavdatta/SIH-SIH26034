@@ -52,6 +52,29 @@ export interface LoginRequest {
   verifier: string;
 }
 
+/** Error whose message came from the server (setup guidance, 403s, etc.). */
+export class AuthServerError extends Error {}
+
+/** Fetch the challenge salt; surface the server's actual error message
+    (e.g. the 503 deployment-setup guidance) instead of a generic one. */
+async function fetchChallengeSalt(email: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'challenge', email }),
+    });
+  } catch {
+    throw new AuthServerError('Could not reach the auth service');
+  }
+  const data = (await res.json().catch(() => ({}))) as { salt?: string; error?: string };
+  if (!res.ok || !data.salt) {
+    throw new AuthServerError(data.error ?? 'Auth service error');
+  }
+  return data.salt;
+}
+
 /**
  * Registration flow: fetch a fresh random salt from the server, derive
  * the verifier locally, return the register payload. Raw password stays
@@ -65,14 +88,8 @@ export async function prepareRegister(input: {
   inviteCode?: string;
   password: string;
 }): Promise<RegisterRequest> {
-  const res = await fetch('/api/auth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'challenge', email: input.email }),
-  });
-  if (!res.ok) throw new Error('Auth service unavailable');
-  const challenge = (await res.json()) as AuthCryptoChallenge;
-  const verifier = await pbkdf2(input.password, challenge.salt);
+  const salt = await fetchChallengeSalt(input.email.trim().toLowerCase());
+  const verifier = await pbkdf2(input.password, salt);
   return {
     mode: 'register',
     name: input.name.trim(),
@@ -89,13 +106,7 @@ export async function prepareRegister(input: {
  * (same 150k iterations), send only the verifier.
  */
 export async function prepareLogin(email: string, password: string): Promise<LoginRequest> {
-  const res = await fetch('/api/auth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'challenge', email }),
-  });
-  if (!res.ok) throw new Error('Auth service unavailable');
-  const challenge = (await res.json()) as AuthCryptoChallenge;
-  const verifier = await pbkdf2(password, challenge.salt);
+  const salt = await fetchChallengeSalt(email.trim().toLowerCase());
+  const verifier = await pbkdf2(password, salt);
   return { mode: 'login', email: email.trim().toLowerCase(), verifier };
 }

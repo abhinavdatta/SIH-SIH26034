@@ -17,7 +17,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { prepareLogin, prepareRegister, type LoginRequest, type RegisterRequest } from './auth-crypto';
+import { prepareLogin, prepareRegister, AuthServerError, type LoginRequest, type RegisterRequest } from './auth-crypto';
 
 export type UserRole = 'seller' | 'compliance_officer';
 
@@ -169,8 +169,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let payload: LoginRequest;
         try {
           payload = await prepareLogin(email, password);
-        } catch {
-          return { ok: false, error: 'Could not reach the auth service' };
+        } catch (err) {
+          return { ok: false, error: err instanceof AuthServerError ? err.message : 'Could not reach the auth service' };
         }
         try {
           const res = await fetch('/api/auth', {
@@ -198,8 +198,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let payload: RegisterRequest;
         try {
           payload = await prepareRegister(input);
-        } catch {
-          return { ok: false, error: 'Could not reach the auth service' };
+        } catch (err) {
+          return { ok: false, error: err instanceof AuthServerError ? err.message : 'Could not reach the auth service' };
         }
         try {
           const res = await fetch('/api/auth', {
