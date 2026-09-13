@@ -24,6 +24,8 @@ export function notifyDataChange() {
   Object.keys(scanCacheMap).forEach(key => delete scanCacheMap[key]);
   reviewQueueCache = null;
   for (const l of listeners) l();
+  // Schedule a debounced cross-device push (no-op when signed out)
+  void import('./scan-sync').then(({ scheduleScanSync }) => scheduleScanSync());
 }
 
 /* ── Dashboard ── */

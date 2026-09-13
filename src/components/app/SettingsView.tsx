@@ -11,6 +11,7 @@ import { useTheme } from 'next-themes';
 import { notifyDataChange } from '@/lib/hooks';
 import { seedDemoData } from '@/lib/local-data';
 import { getLiteModePref, setLiteModePref, isLiteMode, getLiteModeRecommendation, type LiteModePref } from '@/lib/lite-mode';
+import { useAuth, REPO_URL, WATERMARK_LINE, ROLE_LABELS } from '@/lib/auth';
 import { TERMS_SECTIONS, PRIVACY_SECTIONS } from '@/lib/legal-content';
 import LegalAccordion from './LegalAccordion';
 import {
@@ -107,6 +108,7 @@ function validateContact(data: ContactForm): FormErrors {
 export default function SettingsView() {
   const { theme, setTheme } = useTheme();
   const { canInstall, installed, install } = usePWAInstall();
+  const { user, signOut } = useAuth();
 
   /* Contact form state */
   const [contactForm, setContactForm] = useState<ContactForm>({ name: '', email: '', subject: '', message: '' });
@@ -202,7 +204,7 @@ export default function SettingsView() {
     if (Object.keys(errors).length > 0) return;
 
     setFormSubmitting(true);
-    /* Simulate network delay (offline app — data would be queued) */
+    /* Simulated delay for UX; nothing is transmitted by the app */
     await new Promise(r => setTimeout(r, 800));
     setFormSubmitting(false);
     setFormSubmitted(true);
@@ -231,6 +233,39 @@ export default function SettingsView() {
           <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Settings</h2>
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>Configure your LMCC experience</p>
         </div>
+      </div>
+
+      {/* ── Account ── */}
+      <div className="card-static p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <User className="h-4 w-4" style={{ color: 'var(--primary)' }} />
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Account</h3>
+        </div>
+        {user ? (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{user.name}</p>
+                <p className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>
+                  {ROLE_LABELS[user.role]}{user.employeeId ? ` · ${user.employeeId}` : ''}
+                </p>
+                <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{user.email}</p>
+              </div>
+              <button
+                onClick={() => { void signOut(); toast.info('Signed out — scans stay in your account'); }}
+                className="btn-ghost shrink-0"
+              >
+                Sign Out
+              </button>
+            </div>
+            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              This identity is stamped into every exported PDF, CSV, and training file. Your account works from any
+              device; scans sync to it automatically. Sign-out clears data from this browser only.
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Not signed in.</p>
+        )}
       </div>
 
       {/* ── Appearance ── */}
@@ -420,12 +455,12 @@ export default function SettingsView() {
           >
             <Trash2 className="h-3.5 w-3.5" /> Clear pairs
           </button>
-        </div>
-        <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>
-          The ZIP contains <code>ground-truth/&lt;name&gt;.png</code> + <code>&lt;name&gt;.gt.txt</code> pairs — drop its
-          contents straight into <code>training/ground-truth/</code> for tesstrain, or upload it into the Colab
-          notebook. Review the .gt.txt files before training.
-        </p>
+        </div>          <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>
+            The ZIP contains <code>ground-truth/&lt;name&gt;.png</code> + <code>&lt;name&gt;.gt.txt</code> pairs — drop its
+            contents straight into <code>training/ground-truth/</code> for tesstrain, or upload it into the Colab
+            notebook. Review the .gt.txt files before training. The exporter&apos;s identity is recorded in
+            <code>corrections.csv</code>.
+          </p>
       </div>
 
       {/* ── Contact Form ── */}
@@ -581,7 +616,12 @@ export default function SettingsView() {
             Last updated: September 2026. LMCC is a Smart India Hackathon project; these documents
             describe the app as it ships — fully client-side storage with optional user-configured AI providers.
           </p>
-        </div>
+          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+            Source &amp; author:{' '}
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>
+              {WATERMARK_LINE}
+            </a>
+          </p>
         </div>
       </div>
     </div>

@@ -88,7 +88,7 @@ export default function DashboardView() {
           </h2>
           <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
             Verify packaged commodity labels against the LM (Packaged Commodities) Rules, 2011.
-            All processing happens offline on your device.
+            All processing happens on your device — your data stays with you.
           </p>
         </div>
         <button

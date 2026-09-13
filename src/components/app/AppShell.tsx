@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, Upload, ClipboardCheck, History,
-  Settings, Shield, Menu, BookOpen, Sun, Moon, Bot, Keyboard, X,
+  Settings, Shield, Menu, BookOpen, Sun, Moon, Bot, Keyboard, X, FileSearch,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { useTheme } from 'next-themes';
@@ -16,6 +16,54 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/s
 import type { ViewName } from '@/lib/types';
 import { matchShortcut, VIEW_SHORTCUTS } from '@/lib/keyboard-shortcuts';
 import { isLiteMode } from '@/lib/lite-mode';
+import { useAuth, REPO_URL, WATERMARK_LINE, ROLE_LABELS } from '@/lib/auth';
+import type { UserRole } from '@/lib/auth';
+
+/* ── Signed-in user chip — identity that gets stamped into exports ── */
+
+function UserChip() {
+  const { user, signOut } = useAuth();
+  if (!user) return null;
+  const initials = user.name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+  const roleLabel = user.role === 'seller' ? 'Seller' : 'Compliance Officer';
+  return (
+    <div className="px-3 pb-3">
+      <div
+        className="w-full flex items-center gap-2.5 p-2 rounded-[var(--radius-md)] border"
+        style={{ borderColor: 'var(--border-light)', background: 'var(--bg-input)' }}
+      >
+        <div
+          className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+          style={{ background: 'var(--primary)', color: '#fff' }}
+          aria-hidden="true"
+        >
+          {initials || '?'}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.name}</p>
+          <p className="text-[9px] truncate" style={{ color: 'var(--text-muted)' }}>
+            {roleLabel}{user.employeeId ? ` · ${user.employeeId}` : ''}
+          </p>
+        </div>
+        <button
+          onClick={() => { void signOut(); }}
+          className="text-[9px] px-1.5 py-0.5 rounded shrink-0"
+          style={{ color: 'var(--text-muted)' }}
+          aria-label="Sign out"
+          title="Sign out — scans stay in your account and re-sync on next sign-in"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /* ── Skip Link — first focusable element; jumps past the sidebar to content ── */
 
@@ -81,12 +129,13 @@ function ShortcutsCheatSheet({ open, onClose }: { open: boolean; onClose: () => 
 
 /* ── Navigation Configuration ── */
 
-const NAV_ITEMS: { view: ViewName; label: string; icon: React.ReactNode }[] = [
+const NAV_ITEMS: { view: ViewName; label: string; icon: React.ReactNode; officerOnly?: boolean }[] = [
   { view: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-[18px] w-[18px]" /> },
   { view: 'upload-scan', label: 'Scan Product', icon: <Upload className="h-[18px] w-[18px]" /> },
-  { view: 'review-queue', label: 'Review Queue', icon: <ClipboardCheck className="h-[18px] w-[18px]" /> },
+  { view: 'review-queue', label: 'Review Queue', icon: <ClipboardCheck className="h-[18px] w-[18px]" />, officerOnly: true },
   { view: 'product-history', label: 'Scan History', icon: <History className="h-[18px] w-[18px]" /> },
-  { view: 'legal-reference', label: 'Legal Reference', icon: <BookOpen className="h-[18px] w-[18px]" /> },
+  { view: 'product-audit', label: 'Product Audit', icon: <FileSearch className="h-[18px] w-[18px]" /> },
+  { view: 'legal-reference', label: 'Legal Reference', icon: <BookOpen className="h-[18px] w-[18px]" />, officerOnly: true },
   { view: 'ai-providers', label: 'AI Providers', icon: <Bot className="h-[18px] w-[18px]" /> },
   { view: 'settings', label: 'Settings', icon: <Settings className="h-[18px] w-[18px]" /> },
 ];
@@ -97,6 +146,7 @@ const VIEW_TITLES: Record<string, string> = {
   'review-queue': 'Review Queue',
   'compliance-report': 'Compliance Report',
   'product-history': 'Scan History',
+  'product-audit': 'Product Declarations Audit',
   'legal-reference': 'Legal Reference',
   'ai-providers': 'AI Providers',
   settings: 'Settings',
@@ -104,9 +154,21 @@ const VIEW_TITLES: Record<string, string> = {
 
 /* ── Sidebar Content (shared between desktop & mobile Sheet) ── */
 
+/* Views a role can open. Sellers: their work surfaces; Compliance
+   Officers: everything. */
+const ROLE_VIEWS: Record<UserRole, ViewName[]> = {
+  seller: ['dashboard', 'upload-scan', 'product-history', 'product-audit', 'ai-providers', 'settings', 'compliance-report'],
+  compliance_officer: [
+    'dashboard', 'upload-scan', 'review-queue', 'product-history',
+    'legal-reference', 'product-audit', 'ai-providers', 'settings', 'compliance-report',
+  ],
+};
+
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { currentView, setCurrentView } = useAppStore();
   const { theme, setTheme } = useTheme();
+  const { user } = useAuth();
+  const allowed = ROLE_VIEWS[user?.role ?? 'seller'];
 
   function handleNav(view: ViewName) {
     setCurrentView(view);
@@ -135,9 +197,11 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
 
-      {/* Navigation Links */}
+      <UserChip />
+
+      {/* Navigation Links — filtered by role */}
       <nav className="flex-1 px-3 space-y-0.5" role="navigation" aria-label="Main navigation">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter((item) => !item.officerOnly || user?.role === 'compliance_officer').map((item) => {
           const isActive = currentView === item.view;
           return (
             <button
@@ -185,6 +249,17 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>
             Legal Metrology (Packaged Commodities) Rules, 2011
           </p>
+          <p className="text-[10px] mt-1">
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+              style={{ color: 'var(--primary)' }}
+            >
+              {WATERMARK_LINE}
+            </a>
+          </p>
         </div>
       </div>
     </div>
@@ -213,7 +288,18 @@ function HeaderThemeToggle() {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const { currentView, sidebarOpen, setSidebarOpen, toggleSidebar, setCurrentView } = useAppStore();
+  const { user } = useAuth();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  /* Role guard: if the current view is not permitted (or unknown), fall
+     back to the dashboard. Covers deep links + stale stores after a
+     role change. */
+  useEffect(() => {
+    const allowed = ROLE_VIEWS[user?.role ?? 'seller'];
+    if (!allowed.includes(currentView as ViewName)) {
+      setCurrentView('dashboard');
+    }
+  }, [currentView, user?.role, setCurrentView]);
 
   /* Close mobile sidebar on view change + move focus to the content region
      so keyboard users continue from the top of the new view (tabIndex=-1). */
@@ -222,8 +308,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     document.getElementById('main-content')?.focus({ preventScroll: true });
   }, [currentView, setSidebarOpen]);
 
-  /* Global keyboard shortcuts: Alt+1..7 switch views, Alt+K toggles the
-     cheat sheet. Single window listener — components add none of their own. */
+  /* Global keyboard shortcuts: Alt+1..7 switch views (role-filtered),
+     Alt+K toggles the cheat sheet. Single window listener. */
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const shortcut = matchShortcut(e);
@@ -231,13 +317,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       e.preventDefault();
       if (shortcut.view === 'cheatsheet') {
         setShortcutsOpen((open) => !open);
-      } else {
+        return;
+      }
+      const allowed = ROLE_VIEWS[user?.role ?? 'seller'];
+      if (allowed.includes(shortcut.view as ViewName)) {
         setCurrentView(shortcut.view);
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setCurrentView]);
+  }, [setCurrentView, user?.role]);
 
   /* Lite Mode: body class drives CSS downgrades (animations, cursor,
      transitions). Re-applied when Settings changes the preference. */
@@ -318,7 +407,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           role="contentinfo"
         >
           <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            © {new Date().getFullYear()} SIH26034 LMCC — Dept. of Consumer Affairs, Government of India
+            © {new Date().getFullYear()} SIH26034 LMCC — Dept. of Consumer Affairs, Government of India ·{' '}
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>
+              {WATERMARK_LINE}
+            </a>
           </p>
         </footer>
       </div>

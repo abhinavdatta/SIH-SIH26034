@@ -15,6 +15,8 @@ import { updateFieldReview } from '@/lib/local-data';
 import { FIELD_KEY_TO_LABEL, FIELD_STATUS_COLORS, SEVERITY_COLORS, STATUS_COLORS } from '@/lib/types';
 import { ConfidenceBadge } from '@/components/confidence-badge';
 import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { getExportStamp, getExportStampShort, WATERMARK_LINE } from '@/lib/auth';
 
 export default function ComplianceReportView() {
   const { selectedScanId, setCurrentView } = useAppStore();
@@ -68,112 +70,209 @@ export default function ComplianceReportView() {
     toast.success('Field overridden with corrected value');
   }
 
-  /* Export to PDF */
+  /* Export to PDF — autoTable layout: real cell padding, wrapping, zebra rows */
   function exportToPDF() {
     if (!scan) return;
 
-    const doc = new jsPDF();
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
-    let yPosition = 20;
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const M = 14; // page margin (mm)
+    const stamp = getExportStampShort();
+    const lastY = () => (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 40;
 
-    // Title
-    doc.setFontSize(20);
+    doc.setProperties({
+      title: `Compliance Report — ${scan.productName}`,
+      subject: 'Legal Metrology (Packaged Commodities) Rules, 2011',
+      creator: `LMCC · ${WATERMARK_LINE}`,
+    });
+
+    /* ── Header band ── */
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, pageWidth, 26, 'F');
+    doc.setFillColor(139, 92, 246);
+    doc.rect(0, 26, pageWidth, 1.2, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.text('Compliance Report', pageWidth / 2, yPosition, { align: 'center' });
-    yPosition += 15;
-
-    // Product Information
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Product Information', 20, yPosition);
-    yPosition += 10;
-
-    doc.setFontSize(11);
+    doc.setFontSize(17);
+    doc.text('Compliance Report', M, 12);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Product: ${scan.productName}`, 25, yPosition);
-    yPosition += 7;
-    doc.text(`Manufacturer: ${scan.manufacturerName}`, 25, yPosition);
-    yPosition += 7;
-    doc.text(`Status: ${scan.status.replace(/_/g, ' ').toUpperCase()}`, 25, yPosition);
-    yPosition += 7;
-    doc.text(`OCR Confidence: ${(scan.ocrConfidence * 100).toFixed(1)}%`, 25, yPosition);
-    yPosition += 7;
-    doc.text(`Scan Date: ${new Date(scan.createdAt).toLocaleString()}`, 25, yPosition);
-    yPosition += 15;
-
-    // Fields Table
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Field Compliance Details', 20, yPosition);
-    yPosition += 10;
-
-    // Table headers
     doc.setFontSize(9);
+    doc.setTextColor(199, 210, 254);
+    doc.text('Legal Metrology (Packaged Commodities) Rules, 2011 — field-by-field audit', M, 18.5);
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`Generated ${new Date().toLocaleString()}`, pageWidth - M, 12, { align: 'right' });
+    doc.setTextColor(0);
+
+    /* ── Product information — label/value grid ── */
+    autoTable(doc, {
+      startY: 33,
+      margin: { left: M, right: M },
+      theme: 'grid',
+      styles: { fontSize: 8.5, cellPadding: 2.2, lineColor: [226, 232, 240], lineWidth: 0.2, textColor: [15, 23, 42] },
+      columnStyles: {
+        0: { cellWidth: 34, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
+        1: { cellWidth: 'auto' },
+      },
+      body: [
+        ['Product', scan.productName || '—'],
+        ['Manufacturer', scan.manufacturerName || '—'],
+        ['Overall status', scan.status.replace(/_/g, ' ').toUpperCase()],
+        ['OCR confidence', `${(scan.ocrConfidence * 100).toFixed(1)}%`],
+        ['Scan date', new Date(scan.createdAt).toLocaleString()],
+        ['Exported by', stamp],
+      ],
+    });
+
+    /* ── Field compliance table ── */
     doc.setFont('helvetica', 'bold');
-    const headers = ['Field', 'Value', 'Status', 'Confidence'];
-    const columnWidths = [50, 70, 30, 30];
-    let xPos = 20;
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Field compliance details', M, lastY() + 9);
 
-    headers.forEach((header, index) => {
-      doc.text(header, xPos, yPosition);
-      xPos += columnWidths[index];
-    });
-    yPosition += 7;
-
-    // Table rows
-    doc.setFont('helvetica', 'normal');
-    scan.fields.forEach((field) => {
-      if (yPosition > 270) {
-        doc.addPage();
-        yPosition = 20;
-      }
-
-      xPos = 20;
-      const label = FIELD_KEY_TO_LABEL[field.fieldName] || field.fieldName;
-      const value = field.value || 'Missing';
-      const status = field.complianceStatus.replace(/_/g, ' ');
-      const confidence = field.confidence > 0 ? `${(field.confidence * 100).toFixed(0)}%` : 'N/A';
-
-      doc.text(label.substring(0, 25), xPos, yPosition, { maxWidth: 50 });
-      xPos += columnWidths[0];
-      doc.text(value.substring(0, 35), xPos, yPosition, { maxWidth: 70 });
-      xPos += columnWidths[1];
-      doc.text(status.substring(0, 15), xPos, yPosition, { maxWidth: 30 });
-      xPos += columnWidths[2];
-      doc.text(confidence, xPos, yPosition);
-
-      yPosition += 7;
-    });
-
-    // Violations
-    if (scan.violations.length > 0) {
-      if (yPosition > 250) {
-        doc.addPage();
-        yPosition = 20;
-      }
-
-      yPosition += 10;
-      doc.setFontSize(14);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Violations Found', 20, yPosition);
-      yPosition += 10;
-
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      scan.violations.forEach((violation) => {
-        if (yPosition > 270) {
-          doc.addPage();
-          yPosition = 20;
+    autoTable(doc, {
+      startY: lastY() + 12,
+      margin: { left: M, right: M, top: 30 },
+      theme: 'grid',
+      head: [['Field', 'Extracted value', 'Status', 'Conf.', 'Rule']],
+      body: scan.fields.map((f) => [
+        FIELD_KEY_TO_LABEL[f.fieldName] || f.fieldName,
+        f.value || '— (missing)',
+        f.complianceStatus.replace(/_/g, ' '),
+        f.confidence > 0 ? `${Math.round(f.confidence * 100)}%` : 'N/A',
+        f.ruleReference || '—',
+      ]),
+      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 8.5, fontStyle: 'bold', cellPadding: 2.4 },
+      styles: {
+        fontSize: 8.5,
+        cellPadding: { top: 2.4, right: 2.6, bottom: 2.4, left: 2.6 },
+        overflow: 'linebreak',
+        lineColor: [226, 232, 240],
+        lineWidth: 0.15,
+        textColor: [15, 23, 42],
+        valign: 'middle',
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      columnStyles: {
+        0: { cellWidth: 40, fontStyle: 'bold', textColor: [51, 65, 85] },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 26, halign: 'center' },
+        3: { cellWidth: 14, halign: 'right' },
+        4: { cellWidth: 28, textColor: [100, 116, 139], fontSize: 8 },
+      },
+      rowPageBreak: 'avoid',
+      didParseCell: (data) => {
+        if (data.section !== 'body' || data.column.index !== 2) return;
+        const raw = String(data.cell.raw ?? '');
+        const tints: Record<string, { bg: [number, number, number]; fg: [number, number, number] }> = {
+          compliant: { bg: [236, 253, 245], fg: [4, 120, 87] },
+          non_compliant: { bg: [254, 226, 226], fg: [185, 28, 28] },
+          missing: { bg: [241, 245, 249], fg: [71, 85, 105] },
+          needs_review: { bg: [254, 243, 199], fg: [180, 83, 9] },
+          not_applicable: { bg: [243, 244, 246], fg: [75, 85, 99] },
+        };
+        const tint = tints[raw];
+        if (tint) {
+          data.cell.styles.fillColor = tint.bg;
+          data.cell.styles.textColor = tint.fg;
+          data.cell.styles.fontStyle = 'bold';
         }
+      },
+    });
 
-        doc.text(`• ${violation.violationType}: ${violation.description}`, 25, yPosition);
-        doc.text(`  Severity: ${violation.severity}`, 30, yPosition + 5);
-        yPosition += 12;
+    /* ── Violations table ── */
+    const activeViolations = scan.violations.filter((v) => !v.isOverridden);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    if (scan.violations.length > 0) {
+      doc.text(`Violations (${activeViolations.length} active of ${scan.violations.length})`, M, lastY() + 9);
+      autoTable(doc, {
+        startY: lastY() + 12,
+        margin: { left: M, right: M, top: 30 },
+        theme: 'grid',
+        head: [['#', 'Severity', 'Type', 'Description']],
+        body: scan.violations.map((v, i) => [
+          String(i + 1),
+          v.severity,
+          v.violationType.replace(/_/g, ' '),
+          v.description,
+        ]),
+        headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 8.5, fontStyle: 'bold', cellPadding: 2.4 },
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 2.4, right: 2.6, bottom: 2.4, left: 2.6 },
+          overflow: 'linebreak',
+          lineColor: [226, 232, 240],
+          lineWidth: 0.15,
+          textColor: [15, 23, 42],
+          valign: 'middle',
+        },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        columnStyles: {
+          0: { cellWidth: 8, halign: 'center', textColor: [100, 116, 139] },
+          1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+          2: { cellWidth: 42 },
+          3: { cellWidth: 'auto' },
+        },
+        rowPageBreak: 'avoid',
+        didParseCell: (data) => {
+          if (data.section !== 'body' || data.column.index !== 1) return;
+          const raw = String(data.cell.raw ?? '');
+          const tints: Record<string, { bg: [number, number, number]; fg: [number, number, number] }> = {
+            HIGH: { bg: [254, 226, 226], fg: [185, 28, 28] },
+            MEDIUM: { bg: [254, 243, 199], fg: [180, 83, 9] },
+            LOW: { bg: [241, 245, 249], fg: [71, 85, 105] },
+          };
+          const tint = tints[raw];
+          if (tint) {
+            data.cell.styles.fillColor = tint.bg;
+            data.cell.styles.textColor = tint.fg;
+          }
+        },
       });
+    } else {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(4, 120, 87);
+      doc.text('No violations detected — all fields reviewed and compliant.', M, lastY() + 9);
+      doc.setTextColor(0);
     }
 
-    // Save the PDF
-    doc.save(`compliance-report-${scan.id}.pdf`);
+    /* ── Page furniture: continuation band + footer on every page ── */
+    const pageCount = doc.getNumberOfPages();
+    for (let page = 1; page <= pageCount; page++) {
+      doc.setPage(page);
+      if (page > 1) {
+        doc.setFillColor(15, 23, 42);
+        doc.rect(0, 0, pageWidth, 13, 'F');
+        doc.setFillColor(139, 92, 246);
+        doc.rect(0, 13, pageWidth, 0.8, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text('Compliance Report — continued', M, 8.5);
+        doc.setTextColor(0);
+      }
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.2);
+      doc.line(M, pageHeight - 12, pageWidth - M, pageHeight - 12);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(120, 130, 150);
+      doc.text(`${WATERMARK_LINE}  ·  ${stamp}`, pageWidth / 2, pageHeight - 7, { align: 'center' });
+      doc.text(`Page ${page} of ${pageCount}`, pageWidth - M, pageHeight - 7, { align: 'right' });
+      doc.setTextColor(0);
+    }
+
+    /* Save — filename readable instead of a raw scan id */
+    const slug = (scan.productName || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+    doc.save(`compliance-report-${slug || scan.id}.pdf`);
     toast.success('PDF report downloaded');
   }
 
@@ -181,9 +280,10 @@ export default function ComplianceReportView() {
   function exportToCSV() {
     if (!scan) return;
 
-    // Create CSV content
+    // Create CSV content — identity stamp first so the exporter is always recorded
     const rows = [
       ['Compliance Report'],
+      [getExportStamp()],
       ['Product', scan.productName],
       ['Manufacturer', scan.manufacturerName],
       ['Status', scan.status],

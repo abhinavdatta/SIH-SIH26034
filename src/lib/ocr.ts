@@ -170,19 +170,19 @@ async function runWhitelistedRegionPass(
     const h = y1 - y0;
     if (w < 8 || h < 8) return null;
 
-    // Crop + upscale small regions (2x) for more reliable single-line reads
+    // Crop + upscale small regions (2x full mode / 1x lite mode) for more
+    // reliable single-line reads. Lite Mode skips the 2× upscale (a 2×-scaled
+    // drawImage costs ~4× the pixel memory of a 1:1 draw) — accuracy tradeoff
+    // accepted in lite.
     const region = document.createElement('canvas');
-    const scale = h < 40 ? 2 : 1;
+    const liteScale = isLiteMode() ? 1 : 2;
+    const scale = h < 40 ? liteScale : 1;
     region.width = w * scale;
     region.height = h * scale;
     const rctx = region.getContext('2d');
     if (!rctx) return null;
     rctx.imageSmoothingEnabled = true;
     rctx.imageSmoothingQuality = 'high';
-    // Lite Mode: skip the 2× upscale (2×-scaled drawImage costs ~4× the
-    // pixel memory of a 1:1 draw) — accuracy tradeoff accepted in lite.
-    const liteScale = isLiteMode() ? 1 : 2;
-    const scale = h < 40 ? liteScale : 1;
 
     const worker = await ensureTesseractWorker();
     try {

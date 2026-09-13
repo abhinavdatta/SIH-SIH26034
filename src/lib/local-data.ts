@@ -32,6 +32,18 @@ const STORAGE_KEY = 'lmcc_scans_v1';
 const SEEDED_KEY = 'lmcc_seeded_v1';
 const STATUS_MIGRATION_KEY = 'lmcc_status_migration_v2';
 
+/*
+ * Demo seeding gate: signed-in users get their REAL scans from their
+ * account (server sync) — seeding fake demo scans into their dashboard
+ * is pollution, not helpfulness. The app flips this off once auth state
+ * is known; default on so anonymous first-run still gets demo data.
+ */
+let demoSeedingEnabled = true;
+
+export function setDemoSeedingEnabled(enabled: boolean): void {
+  demoSeedingEnabled = enabled;
+}
+
 /* ── Storage Helpers ── */
 
 /**
@@ -148,6 +160,50 @@ function buildScan(data: {
 function clampConfidence(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
+}
+
+/* ── Cross-device sync helpers (used by scan-sync.ts) ── */
+
+/**
+ * Union-merge server scans into the local cache by id. LOCAL WINS on id
+ * conflicts (the device in hand is the freshest editor); server-only
+ * scans are appended. Returns the number of scans added/updated.
+ */
+export function mergeScansFromServer(serverScans: unknown): number {
+  if (typeof window === 'undefined' || !Array.isArray(serverScans)) return 0;
+  const incoming = serverScans.filter(isLocalScan);
+  if (incoming.length === 0) return 0;
+
+  const scans = loadScans();
+  const byId = new Map(scans.map((s) => [s.id, s]));
+  let changed = 0;
+  for (const remote of incoming) {
+    if (!byId.has(remote.id)) {
+      byId.set(remote.id, remote);
+      changed += 1;
+    }
+  }
+  if (changed > 0) saveScans(Array.from(byId.values()));
+  return changed;
+}
+
+/** Snapshot of all scans for pushing to the server account. */
+export function exportScansForSync(): LocalScan[] {
+  return loadScans();
+}
+
+/**
+ * Clear the local scan cache (shared-device sign-out). The server copy
+ * is untouched — it re-hydrates on the next sign-in from any device.
+ */
+export function clearLocalScanCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(SEEDED_KEY);
+  } catch {
+    // Storage unavailable
+  }
 }
 
 /**
@@ -312,7 +368,29 @@ export function createScanFromFields(data: {
   return saveScan(scan);
 }
 
-/* ── One-Time Status Migration ── */
+/**
+ * Re-runs the compliance engine over edited declarations and REPLACES the
+ * existing scan in place (same id, same position, same createdAt) — used by
+ * the Scan History "Edit" flow. Returns the updated scan, or null if the id
+ * is unknown.
+ */
+export function updateScanFromFields(
+  id: string,
+  data: Parameters<typeof createScanFromFields>[0]
+): LocalScan | null {
+  const existing = getScanById(id);
+  if (!existing) return null;
+
+  // Reuse the full pipeline (field checks, violations, status, confidence),
+  // then restore identity fields so history position and timestamps survive.
+  const rebuilt = createScanFromFields(data);
+  const updated: LocalScan = {
+    ...rebuilt,
+    id: existing.id,
+    createdAt: existing.createdAt,
+  };
+  return saveScan(updated);
+}
 
 /**
  * Fixes scans stored before the status-rule fixes:
@@ -364,6 +442,10 @@ export function migrateScanStatuses(): number {
 
 export function seedDemoData(): void {
   if (isSeeded()) return;
+  if (!demoSeedingEnabled) {
+    markSeeded(); // signed-in: never pollute the account with demo rows
+    return;
+  }
 
   const demoScans: LocalScan[] = [];
 

@@ -48,6 +48,18 @@ Create a `.env` file in the root directory:
 ```env
 # Application URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# ── Accounts & cross-device sync (optional but recommended) ──
+# Without these the app still runs; accounts/scans then live only in the
+# browser (in-memory server fallback) and the UI says so honestly.
+# Free tier: upstash.com → Redis → REST API credentials.
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+
+# Server-side pepper used to encrypt user PII (name/email/employee ID)
+# and to HMAC email lookup keys. Generate with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+AUTH_PEPPER=
 ```
 
 Note: AI provider API keys are configured via the UI after installation, not in `.env`.
@@ -100,6 +112,41 @@ In the **Scan Product** view (Upload Mode):
 bun run build
 bun run start
 ```
+
+## Accounts, Roles & Sign In
+
+The app is gated behind a sign-in screen. Anyone can **Create Account** by
+choosing a role, full name, employee ID, work email and password:
+
+- **Seller** — Upload & audit products. Sees Dashboard, Scan Product,
+  Scan History, Product Audit, AI Providers and Settings. Opening a scan
+  report, editing a product from Scan History, and exporting PDFs/CSVs all work.
+- **Compliance Officer / Admin** — Everything a Seller has, plus the Review
+  Queue (approve/override OCR results) and the full Legal Reference.
+
+The same login works from **any device**: accounts, sessions and scans live
+server-side (Upstash Redis when configured). On sign-in the server's scan
+snapshot is merged into the browser; every data change pushes back up.
+Signing out on a shared computer clears the local scan cache — the account
+ copy is untouched and re-hydrates at the next sign-in.
+
+### Security model (what the network tab and DB show)
+
+- **The raw password never leaves the browser.** On submit, the client derives
+  a PBKDF2-SHA256 verifier (150,000 iterations, per-user salt) and sends only
+  that. Inspecting the network tab shows an opaque derived string — never the
+  password. The server additionally scrypt-hashes the verifier before storage
+  (a leaked DB alone cannot be replayed as a login).
+- **PII is encrypted at rest.** Name, email and employee ID are AES-256-GCM
+  encrypted with a key derived from `AUTH_PEPPER`; lookups use an
+  HMAC-SHA256(email) index, so a database dump without the env secret reveals
+  no user PII — not even the email addresses.
+- **Sessions use httpOnly cookies** (SameSite=Lax), not localStorage tokens.
+- **Timing-safe verifier comparison** and no user-enumeration (failed sign-ins
+  are deliberately vague).
+- Login attempts are rate-limited per IP+email.
+
+## Finding Free LLM APIs & Keys
 
 ## Deployment Target: Vercel Hobby Plan
 
@@ -230,12 +277,15 @@ cd ..
 rm -rf lmcc-project-v2
 ```
 
-All data is stored in your browser's localStorage, so uninstalling the application will not delete your scan history. To clear data:
+All scan data lives in your account (server-side, encrypted where noted) with
+a localStorage cache in the browser. To clear local data:
 1. Open Developer Tools (F12)
 2. Go to Application tab
 3. Expand Local Storage
 4. Select `http://localhost:3000`
 5. Clear all entries or specific keys:
-   - `lmcc-scans` - Scan history
+   - `lmcc-scans` - Scan history cache (server copy untouched)
    - `lmcc-ai-providers` - AI provider configurations
    - `lmcc-cloud-ocr-enabled` - Cloud mode preference
+   - `lmcc-training-capture-enabled` - OCR training capture opt-in
+   - IndexedDB `lmcc-training` - retained training crops (7-day expiry)

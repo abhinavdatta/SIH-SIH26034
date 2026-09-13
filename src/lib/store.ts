@@ -10,6 +10,9 @@ interface AppState {
   setCurrentView: (view: ViewName) => void;
   selectedScanId: string | null;
   setSelectedScanId: (id: string | null) => void;
+  /** Scan currently being edited via the Product Audit form (null = create mode). */
+  editingScanId: string | null;
+  setEditingScanId: (id: string | null) => void;
 
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
@@ -24,6 +27,8 @@ export const useAppStore = create<AppState>((set) => ({
   setCurrentView: (view) => set({ currentView: view, sidebarOpen: false }),
   selectedScanId: null,
   setSelectedScanId: (id) => set({ selectedScanId: id }),
+  editingScanId: null,
+  setEditingScanId: (id) => set({ editingScanId: id }),
 
   sidebarOpen: false,
   setSidebarOpen: (open) => set({ sidebarOpen: open }),

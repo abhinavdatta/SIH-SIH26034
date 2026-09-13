@@ -6,7 +6,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { History, Search, Trash2, Eye, Filter, Inbox } from 'lucide-react';
+import { History, Search, Trash2, Eye, Filter, Inbox, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { useScans, notifyDataChange } from '@/lib/hooks';
@@ -16,7 +16,7 @@ import { useAppStore } from '@/lib/store';
 
 export default function ProductHistoryView() {
   const scans = useScans();
-  const { setCurrentView, setSelectedScanId, triggerRefresh } = useAppStore();
+  const { setCurrentView, setSelectedScanId, setEditingScanId, triggerRefresh } = useAppStore();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
 
@@ -40,6 +40,12 @@ export default function ProductHistoryView() {
     triggerRefresh();
     notifyDataChange();
     toast.success('Scan deleted');
+  }
+
+  /** Open the Product Audit form pre-filled with this scan for in-place editing. */
+  function handleEdit(id: string) {
+    setEditingScanId(id);
+    setCurrentView('product-audit');
   }
 
   return (
@@ -126,6 +132,9 @@ export default function ProductHistoryView() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button onClick={() => goToReport(scan.id)} className="btn-ghost !p-2" aria-label="View report">
                     <Eye className="h-4 w-4" style={{ color: 'var(--primary)' }} />
+                  </button>
+                  <button onClick={() => handleEdit(scan.id)} className="btn-ghost !p-2" aria-label="Edit product declarations" title="Edit product declarations">
+                    <Pencil className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
                   </button>
                   <button onClick={() => handleDelete(scan.id)} className="btn-ghost !p-2" aria-label="Delete scan">
                     <Trash2 className="h-4 w-4" style={{ color: 'var(--danger)' }} />

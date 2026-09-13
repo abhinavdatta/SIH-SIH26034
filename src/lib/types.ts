@@ -8,6 +8,7 @@ export type ViewName =
   | 'review-queue'
   | 'compliance-report'
   | 'product-history'
+  | 'product-audit'
   | 'legal-reference'
   | 'ai-providers'
   | 'settings';

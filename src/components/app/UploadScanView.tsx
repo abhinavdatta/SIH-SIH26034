@@ -5,8 +5,8 @@
 
 'use client';
 
-import { useState } from 'react';
-import { Check, Loader2, Eye, RotateCcw, Package, AlertCircle, Upload, Sparkles, Info } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Loader2, Eye, RotateCcw, Package, AlertCircle, Upload, Sparkles, Info, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Badge } from '@/components/ui/badge';
@@ -62,6 +62,22 @@ export default function UploadScanView() {
   const [step, setStep] = useState(0);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<LocalScan | null>(null);
+
+  /* Live activity console — surfaces what the OCR/AI engine is doing.
+     Timestamped, capped at 100 lines (memory-friendly), shown during
+     upload-mode scans (local/AI/hybrid) and as a collapsible log after. */
+  const [consoleLines, setConsoleLines] = useState<string[]>([]);
+  const consoleScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    consoleScrollRef.current?.scrollTo({ top: consoleScrollRef.current.scrollHeight });
+  }, [consoleLines]);
+
+  function appendLog(message: string) {
+    if (!message) return;
+    const time = new Date().toLocaleTimeString([], { hour12: false });
+    setConsoleLines(prev => [...prev.slice(-99), `[${time}] ${message}`]);
+  }
   const [ocrMode, setOcrMode] = useState<OcrMode>('hybrid');
   const [ocrRegion, setOcrRegion] = useState<OCRRegionMode>('full');
   const [aiProviderConfigured, setAiProviderConfigured] = useState(() => {
@@ -91,6 +107,10 @@ export default function UploadScanView() {
     setScanning(true);
     setStep(0);
     setProgress(0);
+    setConsoleLines([]);
+    appendLog(scanMode === 'demo'
+      ? 'Demo scan: running predefined product scenario'
+      : `Scan started — OCR mode: ${ocrMode.toUpperCase()}`);
 
     try {
       let scan: LocalScan;
@@ -127,7 +147,7 @@ export default function UploadScanView() {
         try {
           if (ocrMode === 'local') {
             /* Local Only: Use only Tesseract.js */
-            console.log('[Scan] Using Local OCR mode');
+            appendLog('Local mode: Tesseract.js runs in your browser — nothing leaves this device');
 
             // Step 1: Format Check & Loading
             setStep(1);
@@ -156,7 +176,7 @@ export default function UploadScanView() {
               }
 
               if (progress.message && ocrProgressRef.current !== progress.progress) {
-                console.log(`Local OCR: ${progress.message}`);
+                appendLog(`Local OCR: ${progress.message}`);
                 ocrProgressRef.current = progress.progress;
               }
             }, { regionMode: ocrRegion });
@@ -171,6 +191,7 @@ export default function UploadScanView() {
             }
 
             console.log('[Scan] Using AI OCR mode');
+            appendLog(`AI mode: sending label to ${activeProvider.model} for vision extraction`);
 
             const ocrProgressRef = { current: 0 };
             ocrResult = await performCloudOCR(uploadedFile!, {
@@ -180,7 +201,7 @@ export default function UploadScanView() {
               category: activeProvider.category,
             }, (progress: OCRProgress) => {
               if (progress.message && ocrProgressRef.current !== progress.progress) {
-                console.log(`AI OCR: ${progress.message}`);
+                appendLog(`AI OCR: ${progress.message}`);
                 ocrProgressRef.current = progress.progress;
               }
               // Map cloud OCR progress to the dedicated AI step system
@@ -204,6 +225,7 @@ export default function UploadScanView() {
             }
 
             console.log('[Scan] Using Hybrid OCR mode');
+            appendLog('Hybrid mode: local extraction first, AI fallback for uncertain fields');
 
             const ocrProgressRef = { current: 0 };
             ocrResult = await performHybridOCR(uploadedFile!, {
@@ -213,7 +235,7 @@ export default function UploadScanView() {
               category: activeProvider.category,
             }, (progress: OCRProgress) => {
               if (progress.message && ocrProgressRef.current !== progress.progress) {
-                console.log(`Hybrid OCR: ${progress.message}`);
+                appendLog(`Hybrid: ${progress.message}`);
                 ocrProgressRef.current = progress.progress;
               }
               // Map hybrid progress to our step system
@@ -233,13 +255,14 @@ export default function UploadScanView() {
             }, { regionMode: ocrRegion });
 
             usedCloudOCR = ocrResult.extractionMethod === 'hybrid' || ocrResult.extractionMethod === 'cloud_ai';
-            console.log(`[Hybrid OCR] Extraction method: ${ocrResult.extractionMethod}`);
+            appendLog(`Extraction method resolved: ${ocrResult.extractionMethod}`);
 
             setStep(4);
             setProgress(95);
           }
         } catch (error) {
           console.warn('OCR failed:', error);
+          appendLog(`ERROR: ${error instanceof Error ? error.message : 'Unknown failure'}`);
 
           // Determine error type for better messaging
           let errorMessage = 'Scan failed. Please try again.';
@@ -288,7 +311,7 @@ export default function UploadScanView() {
         setProgress(90);
 
         // Log which path was used
-        console.log(`[Scan] Used ${usedCloudOCR ? 'Cloud AI' : 'Local Tesseract'} OCR`);
+        appendLog(`Compliance check complete — ${ocrResult.fields.filter(f => f.value).length} field(s) extracted via ${usedCloudOCR ? 'cloud AI' : 'local Tesseract'}`);
 
         // Create scan from OCR results
         scan = createScanFromOCR({
@@ -342,6 +365,7 @@ export default function UploadScanView() {
     setResult(null);
     setStep(0);
     setProgress(0);
+    setConsoleLines([]);
   }
 
   /* Quick violation count for the preview badge */
@@ -716,7 +740,7 @@ export default function UploadScanView() {
         </div>
       )}
 
-      {/* Progress Steps */}
+      {/* Progress Steps + Live Activity Console */}
       {scanning && (
         <div className="card-static p-6">
           <div className="flex items-center gap-2 mb-5">
@@ -749,7 +773,67 @@ export default function UploadScanView() {
               );
             })}
           </div>
+
+          {/* Live activity console — what the engine is doing right now */}
+          <div
+            className="mt-6 rounded-[var(--radius-md)] border overflow-hidden"
+            style={{ borderColor: 'var(--border-default)', background: '#0d1117' }}
+            role="log"
+            aria-live="polite"
+            aria-label="Scan activity console"
+          >
+            <div
+              className="flex items-center gap-2 px-3 py-1.5 border-b"
+              style={{ borderColor: '#21262d', color: '#8b949e' }}
+            >
+              <Terminal className="h-3 w-3" />
+              <span className="text-[10px] font-medium uppercase tracking-wider">Activity</span>
+              <span className="ml-auto text-[10px]">{consoleLines.length} line{consoleLines.length !== 1 ? 's' : ''}</span>
+            </div>
+            <div ref={consoleScrollRef} className="h-40 overflow-y-auto px-3 py-2 font-mono">
+              {consoleLines.length === 0 ? (
+                <p className="text-[11px]" style={{ color: '#8b949e' }}>Waiting for engine output…</p>
+              ) : (
+                consoleLines.map((line, i) => (
+                  <p
+                    key={i}
+                    className="text-[11px] leading-relaxed break-words"
+                    style={{ color: line.includes('ERROR:') ? '#f85149' : line.includes('retrying') ? '#d29922' : '#c9d1d9' }}
+                  >
+                    {line}
+                  </p>
+                ))
+              )}
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Post-scan activity log (collapsible) */}
+      {result && !scanning && consoleLines.length > 0 && (
+        <details className="card-static px-5 py-3">
+          <summary
+            className="text-xs font-medium cursor-pointer flex items-center gap-2"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <Terminal className="h-3.5 w-3.5" style={{ color: 'var(--primary)' }} />
+            Scan activity log ({consoleLines.length} lines)
+          </summary>
+          <div
+            className="mt-3 rounded-[var(--radius-md)] border px-3 py-2 font-mono max-h-48 overflow-y-auto"
+            style={{ borderColor: 'var(--border-default)', background: '#0d1117' }}
+          >
+            {consoleLines.map((line, i) => (
+              <p
+                key={i}
+                className="text-[11px] leading-relaxed break-words"
+                style={{ color: line.includes('ERROR:') ? '#f85149' : '#c9d1d9' }}
+              >
+                {line}
+              </p>
+            ))}
+          </div>
+        </details>
       )}
 
       {/* Scan Results */}

@@ -325,6 +325,17 @@ body.lite-mode .card:hover {
 }
 .input-base::placeholder { color: var(--text-muted); }
 
+/* Input with a leading icon — reserves real space for the icon so the
+   label/placeholder never sits underneath it. Declared unlayered so it
+   reliably beats .input-base's shorthand padding regardless of cascade
+   layers. */
+.input-icon {
+  padding-left: 2.4rem;
+}
+.input-icon::placeholder {
+  padding-left: 0;
+}
+
 /* ── Button styles ── */
 
 .btn-primary {

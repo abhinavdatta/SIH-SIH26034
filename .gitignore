@@ -1,0 +1,50 @@
+# ── Dependencies ──
+node_modules/
+.pnp
+.pnp.js
+
+# ── Next.js build output ──
+.next/
+out/
+build/
+dist/
+
+# ── Environment & secrets ──
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+
+# ── Logs ──
+server.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ── TypeScript / bundler caches ──
+*.tsbuildinfo
+.turbo/
+
+# ── Testing / coverage ──
+coverage/
+
+# ── OS junk ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editors / agents ──
+.vscode/
+.idea/
+.freebuff/
+
+# ── Training artifacts (regenerable; keep notebooks & scripts) ──
+training/models/*.checkpoint
+training/ground-truth/*.png
+training/images/*.tmp
+
+# ── Vercel ──
+.vercel

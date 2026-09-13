@@ -19,6 +19,8 @@
 //  3. Settings can export everything as a tesstrain-ready ZIP.
 // ═══════════════════════════════════════════════════════════════
 
+import { getExportStamp } from './auth';
+
 /* ── Settings ── */
 
 const TRAINING_CAPTURE_KEY = 'lmcc-training-capture-enabled';
@@ -554,7 +556,12 @@ export async function exportTrainingPairsAsZip(): Promise<{ blob: Blob; count: n
   };
 
   const entries: ZipEntrySpec[] = [];
-  const csvRows: string[] = ['fieldName,correctedValue,originalValue,capturedAt,fileName'];
+  // Row 2 records who exported this dataset (identity provenance for audits).
+  // The .gt.txt files stay pure transcriptions — tesstrain requires that.
+  const csvRows: string[] = [
+    'fieldName,correctedValue,originalValue,capturedAt,fileName',
+    `"${getExportStamp().replace(/"/g, '""')}"`,
+  ];
 
   for (const pair of pairs) {
     const stem = uniqueStem(`review_${pair.fieldName}`);

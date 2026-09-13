@@ -5,6 +5,7 @@
    renders instantly even on constrained devices.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+import Link from 'next/link';
 import { ShieldAlert, Home, Shield } from 'lucide-react';
 
 export default function NotFound() {
@@ -76,7 +77,7 @@ export default function NotFound() {
           dashboard — every tool is reachable from there.
         </p>
 
-        <a
+        <Link
           href="/"
           style={{
             display: 'inline-flex',
@@ -94,7 +95,7 @@ export default function NotFound() {
         >
           <Home style={{ width: '1rem', height: '1rem' }} aria-hidden="true" />
           Go to Dashboard
-        </a>
+        </Link>
 
         <p
           style={{
@@ -108,7 +109,15 @@ export default function NotFound() {
           }}
         >
           <Shield style={{ width: '0.75rem', height: '0.75rem' }} aria-hidden="true" />
-          SIH26034 LMCC — Legal Metrology Compliance Checker
+          SIH26034 LMCC — Legal Metrology Compliance Checker ·{' '}
+          <a
+            href="https://github.com/abhinavdatta"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--primary)' }}
+          >
+            github.com/abhinavdatta
+          </a>
         </p>
       </main>
     </div>
