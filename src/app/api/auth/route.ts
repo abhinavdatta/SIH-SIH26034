@@ -24,6 +24,7 @@ import { cookies } from 'next/headers';
 import 'server-only';
 import {
   isDurableBackend,
+  pepperSource,
   getAccount,
   saveAccount,
   hashVerifier,
@@ -45,13 +46,10 @@ const COOKIE_NAME = 'lmcc_session';
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-/* ── Fail closed: production requires a real pepper (env or a persisted
-   server-generated secret on a durable filesystem). ── */
+/* ── Fail closed: production requires a real pepper — from the env, or a
+   persisted server-generated secret on a durable filesystem. ── */
 function pepperConfigured(): boolean {
-  if (process.env.AUTH_PEPPER && process.env.AUTH_PEPPER.length >= 16) return true;
-  // Auto-generated .data/pepper.secret keeps local/self-hosted production
-  // runs working without env setup; serverless (Vercel) has no durable FS.
-  return isDurableBackend;
+  return pepperSource() !== 'none';
 }
 
 /* ── Naive per-instance rate limiter (per account+IP) ── */
@@ -139,8 +137,12 @@ function challengeSalt(email: string): string {
 export async function POST(request: NextRequest) {
   // Production guardrail: refuse to create/store credentials unprotected.
   if (IS_PROD && !pepperConfigured()) {
+    const onVercel = Boolean(process.env.VERCEL);
+    const hint = onVercel
+      ? 'On Vercel: create a KV store (Storage → Create → Marketplace Redis) — KV_REST_API_URL/TOKEN are injected automatically — or set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN. AUTH_PEPPER must also be set (32+ random chars).'
+      : 'Set AUTH_PEPPER (32+ random chars) in the environment — see .env.example. A durable local store is used automatically on self-hosted servers.';
     return NextResponse.json(
-      { error: 'Auth is not configured: set AUTH_PEPPER (32+ random chars) in the deployment environment.' },
+      { error: `Auth is not configured on this deployment. ${hint}` },
       { status: 503 }
     );
   }

@@ -26,10 +26,18 @@ import { scryptSync, randomBytes, createHmac, createCipheriv, createDecipheriv, 
 import fs from 'node:fs';
 import path from 'node:path';
 
-/* ── Backend selection ── */
+/* ── Backend selection ──
 
-const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
-const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+   Supported, in priority order:
+   1. UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN  (direct Upstash)
+   2. KV_REST_API_URL / KV_REST_API_TOKEN  (Vercel Marketplace KV —
+      auto-injected when you create a KV store in the Vercel dashboard,
+      zero manual env typing)
+   3. Durable local file (.data/auth-kv.json) on non-serverless hosts
+   4. In-memory Map (last resort — survives only within one process) */
+
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 export const isPersistentBackend = Boolean(UPSTASH_URL && UPSTASH_TOKEN);
 
 async function redisCommand<T = unknown>(command: (string | number)[]): Promise<T | null> {
@@ -165,6 +173,13 @@ async function kvDel(key: string): Promise<void> {
 
 let cachedPepper: Buffer | null = null;
 
+/** Where the pepper comes from — the auth route uses this to fail closed
+    when nothing durable exists (serverless without AUTH_PEPPER). */
+export function pepperSource(): 'env' | 'file' | 'none' {
+  if (process.env.AUTH_PEPPER && process.env.AUTH_PEPPER.length >= 16) return 'env';
+  return FILE_BACKEND_ENABLED ? 'file' : 'none';
+}
+
 /**
  * Pepper used for AES-GCM PII encryption + HMAC email indexes.
  * Priority: AUTH_PEPPER env → persisted auto-generated secret (.data/pepper.secret)
@@ -174,12 +189,12 @@ let cachedPepper: Buffer | null = null;
  */
 function getPepper(): Buffer {
   if (cachedPepper) return cachedPepper;
-  const raw = process.env.AUTH_PEPPER;
-  if (raw && raw.length >= 16) {
-    cachedPepper = createHash('sha256').update(raw).digest(); // 32 bytes
+  const source = pepperSource();
+  if (source === 'env') {
+    cachedPepper = createHash('sha256').update(process.env.AUTH_PEPPER!).digest(); // 32 bytes
     return cachedPepper;
   }
-  if (FILE_BACKEND_ENABLED) {
+  if (source === 'file') {
     try {
       const secretFile = path.join(DATA_DIR, 'pepper.secret');
       let secret = '';

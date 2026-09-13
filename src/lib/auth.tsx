@@ -17,7 +17,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { prepareLogin, prepareRegister } from './auth-crypto';
+import { prepareLogin, prepareRegister, type LoginRequest, type RegisterRequest } from './auth-crypto';
 
 export type UserRole = 'seller' | 'compliance_officer';
 
@@ -155,15 +155,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ...state,
       refresh,
       signIn: async (email, password) => {
+        let payload: LoginRequest;
         try {
-          const payload = await prepareLogin(email, password);
+          payload = await prepareLogin(email, password);
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+        try {
           const res = await fetch('/api/auth', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
-          const data = (await res.json()) as SessionResponse;
+          const data = (await res.json().catch(() => ({}))) as SessionResponse;
           if (!res.ok || !data.authenticated) {
+            // Surface the server's actual reason (e.g. the 503 setup guidance)
+            // instead of a generic network-failure message.
             return { ok: false, error: data.error ?? 'Invalid email or password' };
           }
           applySession(data);
@@ -177,14 +184,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp: async (input) => {
         const pwError = validatePassword(input.password);
         if (pwError) return { ok: false, error: pwError };
+        let payload: RegisterRequest;
         try {
-          const payload = await prepareRegister(input);
+          payload = await prepareRegister(input);
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+        try {
           const res = await fetch('/api/auth', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
-          const data = (await res.json()) as SessionResponse;
+          const data = (await res.json().catch(() => ({}))) as SessionResponse;
           if (!res.ok || !data.authenticated) {
             return { ok: false, error: data.error ?? 'Could not create the account' };
           }

@@ -332,7 +332,7 @@ SIH-SIH26034/
 
 ## 👤 Author
 
-Built with ⚡ for **Smart India Hackathon 2026** — problem statement **SIH26034**,
+ **Smart India Hackathon 2026** — problem statement **SIH26034**,
 Dept. of Consumer Affairs, Government of India.
 
 <div align="center">
