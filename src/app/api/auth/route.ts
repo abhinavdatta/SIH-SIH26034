@@ -23,6 +23,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import 'server-only';
 import {
+  ensureSupabaseSchema,
+  isSupabaseBackend,
   isDurableBackend,
   backendName,
   pepperSource,
@@ -54,6 +56,24 @@ const IS_PROD = process.env.NODE_ENV === 'production';
    persisted server-generated secret on a durable filesystem. ── */
 function pepperConfigured(): boolean {
   return pepperSource() !== 'none';
+}
+
+/**
+ * Verify the Supabase schema exists (migration 0001 run) before touching
+ * credentials — answers with actionable setup guidance instead of an
+ * opaque 500 from PostgREST 404s. Falls through (undefined) when Supabase
+ * isn't the configured backend, so the check is a no-op elsewhere.
+ */
+async function schemaGuard(): Promise<NextResponse | undefined> {
+  if (!isSupabaseBackend) return undefined;
+  if (await ensureSupabaseSchema()) return undefined;
+  return NextResponse.json(
+    {
+      error:
+        'Auth database is not initialized on this deployment. Run supabase/migrations/0001_lmcc_auth.sql in the Supabase Dashboard → SQL Editor (creates lmcc_accounts, lmcc_sessions, lmcc_user_scans, lmcc_rate_limits), then retry — no redeploy needed.',
+    },
+    { status: 503, headers: { 'Retry-After': '60' } }
+ );
 }
 
 /* ── Invite-code gate for the privileged role ──
@@ -162,13 +182,18 @@ export async function POST(request: NextRequest) {
   if (IS_PROD && !pepperConfigured()) {
     const onVercel = Boolean(process.env.VERCEL);
     const hint = onVercel
-      ? 'On Vercel: create a KV store (Storage → Create → Marketplace Redis) — KV_REST_API_URL/TOKEN are injected automatically — or set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN. AUTH_PEPPER must also be set (32+ random chars).'
+      ? 'On Vercel: set AUTH_PEPPER (32+ random chars) in Settings → Environment Variables, and configure a durable store (Supabase via SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY, or a KV/Redis store) — then redeploy.'
       : 'Set AUTH_PEPPER (32+ random chars) in the environment — see .env.example. A durable local store is used automatically on self-hosted servers.';
     return NextResponse.json(
       { error: `Auth is not configured on this deployment. ${hint}` },
       { status: 503 }
     );
   }
+
+  // Supabase schema must exist (migration 0001 run) — answer with setup
+  // guidance instead of a bare 500 from missing tables.
+  const schemaProblem = await schemaGuard();
+  if (schemaProblem) return schemaProblem;
 
   let body: Record<string, unknown>;
   try {
@@ -265,7 +290,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       authenticated: true,
       user: { name, email, employeeId, role },
-      ...deploymentStatus(),
+      ...(await deploymentStatus()),
     });
   }
 
@@ -319,30 +344,32 @@ export async function POST(request: NextRequest) {
    rides on EVERY response shape, including unauthenticated ones — the
    login screen renders the role picker before any session exists. */
 
-function deploymentStatus() {
+async function deploymentStatus() {
   return {
     persistent: isDurableBackend,
     backend: backendName(),
     rateLimitMode: rateLimitMode(),
     officerRegistration: officerCodesEnabled(),
+    // Only meaningful (and only present) when Supabase is the backend.
+    ...(isSupabaseBackend ? { schemaReady: await ensureSupabaseSchema() } : {}),
   };
 }
 
 export async function GET() {
   const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value;
-  if (!token) return NextResponse.json({ authenticated: false, ...deploymentStatus() });
+  if (!token) return NextResponse.json({ authenticated: false, ...(await deploymentStatus()) });
 
   const session = await getSessionByToken(token);
-  if (!session) return NextResponse.json({ authenticated: false, ...deploymentStatus() });
+  if (!session) return NextResponse.json({ authenticated: false, ...(await deploymentStatus()) });
 
   const account = await getAccountById(session.userId);
-  if (!account) return NextResponse.json({ authenticated: false, ...deploymentStatus() });
+  if (!account) return NextResponse.json({ authenticated: false, ...(await deploymentStatus()) });
 
   const pii = decryptAccountPII(account);
   return NextResponse.json({
     authenticated: true,
     user: { ...pii, role: account.role },
-    ...deploymentStatus(),
+    ...(await deploymentStatus()),
   });
 }

@@ -32,6 +32,30 @@ const HEADERS = {
   'Content-Type': 'application/json',
 };
 
+/* ── Schema readiness probe ──
+
+   The Data API 404s on tables that don't exist (migration not yet run).
+   Probe lmcc_accounts once and cache, so the auth route can answer with
+   an actionable setup message instead of an opaque 500. A positive
+   result is cached for the process lifetime; a negative one is retried
+   every 15s so running the migration self-heals without a redeploy. */
+let schemaCache: { ok: boolean; at: number } | null = null;
+
+export async function ensureSupabaseSchema(): Promise<boolean> {
+  if (!isSupabaseBackend) return false;
+  if (schemaCache?.ok) return true;
+  if (schemaCache && Date.now() - schemaCache.at < 15_000) return schemaCache.ok;
+  try {
+    const res = await fetch(`${REST}/lmcc_accounts?select=id&limit=1`, { headers: { ...HEADERS }, cache: 'no-store' });
+    const ok = res.ok;
+    schemaCache = { ok, at: Date.now() };
+    return ok;
+  } catch {
+    schemaCache = { ok: false, at: Date.now() };
+    return false;
+  }
+}
+
 async function rest<T>(path: string, init?: RequestInit): Promise<T | null> {
   const res = await fetch(`${REST}${path}`, { ...init, headers: { ...HEADERS, ...(init?.headers ?? {}) }, cache: 'no-store' });
   if (!res.ok) {

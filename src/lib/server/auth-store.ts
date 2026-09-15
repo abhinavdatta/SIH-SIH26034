@@ -316,6 +316,7 @@ export function verifyVerifier(clientVerifier: string, stored: string): boolean 
 /* ── Records ── */
 
 export type { StoredAccount } from './supabase-store';
+export { ensureSupabaseSchema, isSupabaseBackend } from './supabase-store';
 
 export function accountKey(emailIndex: string): string {
   return `lmcc:acct:${emailIndex}`;
