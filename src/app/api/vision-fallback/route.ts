@@ -407,14 +407,13 @@ function validateOCRResult(data: unknown): OCRResult | null {
 
 /* ── Serverless execution limit ──
  *
- * This app deploys on the Vercel HOBBY plan (10s hard cap per function).
- * The vision-model calls below routinely need 30-120s, which exceeds the
- * cap: on Vercel the gateway kills the function and returns 502 before
- * this route's own error handling runs. Declaring maxDuration = 10 keeps
- * the limit explicit; the UI steers cloud OCR to faster models/Local mode.
- * Hobby-incompatible latency is documented in docs/SETUP.md.
+ * Vision-model scans routinely need 30-120s (the 90B model up to ~4 min).
+ * Since Vercel's Fluid compute became the default, the Hobby plan allows
+ * 300s per function (previously 10-60s, which caused
+ * FUNCTION_INVOCATION_TIMEOUT kills mid-scan). Declaring 300 gives slow
+ * models room; the internal axios timeout below is the effective limit.
  */
-export const maxDuration = 10;
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {
@@ -505,7 +504,7 @@ export async function POST(request: NextRequest) {
           // Vision models on NVIDIA regularly take 30-60s (11B measured 28-48s
           // for one label). 30s aborted real work mid-flight; 120s covers the
           // slowest vision model while still bounded.
-          timeout: 120000,
+          timeout: 200000,
         });
 
         providerName = model;

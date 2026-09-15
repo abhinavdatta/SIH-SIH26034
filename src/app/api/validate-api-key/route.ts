@@ -8,14 +8,13 @@ import { validateOutboundApiUrl } from '@/lib/ssrf';
 
 /* ── Serverless execution limit ──
  *
- * This app deploys on the Vercel HOBBY plan, where serverless functions
- * are hard-capped at 10 seconds. Setting maxDuration = 10 makes the
- * limit explicit and lets local dev behave like production. The outbound
- * validation request below is deliberately cheap (max_tokens: 1, 8s
- * timeout) so it completes well inside the cap — a longer internal
- * timeout would be killed by Vercel's gateway (the historic 502 bug).
+ * Two-stage validation: stage 1 (models endpoint, ≤4s) + stage 2
+ * (1-token probe, ≤8s) — worst case ~12s plus overhead. Under Fluid
+ * compute the Hobby plan allows up to 300s; declaring 60 leaves ample
+ * headroom so slow providers can never trigger
+ * FUNCTION_INVOCATION_TIMEOUT before our own error handling runs.
  */
-export const maxDuration = 10;
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
