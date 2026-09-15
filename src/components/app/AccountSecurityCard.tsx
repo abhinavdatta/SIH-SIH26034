@@ -13,7 +13,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Loader2, HelpCircle, Smartphone, ShieldCheck, ShieldOff, Lock, Check } from 'lucide-react';
+import { Loader2, HelpCircle, Smartphone, ShieldCheck, ShieldOff, Lock, Check, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/auth';
 
@@ -272,6 +272,99 @@ function TotpSection({ enabled }: { enabled: boolean }) {
   );
 }
 
+/* ── Change-password section ── */
+
+function ChangePasswordSection() {
+  const { user, changePassword } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (!user) return null;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (next !== confirm) {
+      toast.error('New passwords do not match');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await changePassword(current, next);
+      if (result.ok) {
+        toast.success('Password changed', {
+          description: 'Use the new password next time. Other signed-in devices were logged out for safety.',
+        });
+        setOpen(false);
+        setCurrent('');
+        setNext('');
+        setConfirm('');
+      } else {
+        toast.error('Could not change password', { description: result.error });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-[var(--radius-md)] p-3" style={{ background: 'var(--bg-secondary)' }}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <KeyRound className="h-4 w-4 shrink-0" style={{ color: 'var(--primary)' }} />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Password</p>
+            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Change it any time — other devices get logged out</p>
+          </div>
+        </div>
+        <button type="button" onClick={() => setOpen((o) => !o)} className="btn-ghost text-[11px] shrink-0">
+          {open ? 'Hide' : 'Change'}
+        </button>
+      </div>
+
+      {open && (
+        <form onSubmit={handleSubmit} className="space-y-2 mt-2">
+          <input
+            type="password"
+            placeholder="Current password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+            aria-label="Current password"
+            className="input-base w-full text-xs"
+            required
+          />
+          <input
+            type="password"
+            placeholder="New password (8+ chars, letter + number)"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            autoComplete="new-password"
+            aria-label="New password"
+            className="input-base w-full text-xs"
+            required
+          />
+          <input
+            type="password"
+            placeholder="Repeat new password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+            aria-label="Repeat new password"
+            className="input-base w-full text-xs"
+            required
+          />
+          <button type="submit" disabled={busy} className="btn-primary w-full py-1.5 text-xs">
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Change Password'}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 /* ── Card (rendered inside Settings → Account) ── */
 
 export default function AccountSecurityCard() {
@@ -286,6 +379,7 @@ export default function AccountSecurityCard() {
         <p className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Account Security</p>
       </div>
       <div className="space-y-2">
+        <ChangePasswordSection />
         <SecurityQuestionsSection hasSaved={hasSecurityAnswers} />
         <TotpSection enabled={totpEnabled} />
         <p className="text-[10px] flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>

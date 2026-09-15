@@ -128,3 +128,19 @@ export async function prepareReset(
   const newVerifier = await pbkdf2(newPassword, salt);
   return { mode: 'forgot-reset', ticket, answers, newVerifier };
 }
+
+/** Change-password flow (signed in): verifiers for current + new password.
+ * Both use the account's challenge salt so the current one verifies against
+ * the stored hash and the new one logs in cleanly afterwards. */
+export async function prepareChangePassword(
+  email: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<{ mode: 'change-password'; currentVerifier: string; newVerifier: string }> {
+  const salt = await fetchChallengeSalt(email.trim().toLowerCase());
+  const [currentVerifier, newVerifier] = await Promise.all([
+    pbkdf2(currentPassword, salt),
+    pbkdf2(newPassword, salt),
+  ]);
+  return { mode: 'change-password', currentVerifier, newVerifier };
+}

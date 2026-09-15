@@ -488,6 +488,56 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  /* ── change-password: signed-in user rotates their own password ──
+
+     Requires the current password (as a verifier). On success the
+     current device is re-issued a fresh session (its cookie is re-set
+     in this response), while every OTHER device's session — issued
+     before passwordChangedAt — is invalidated by the GET check. */
+  if (mode === 'change-password') {
+    const jar = await cookies();
+    const token = jar.get(COOKIE_NAME)?.value;
+    const session = token ? await getSessionByToken(token) : null;
+    if (!session) return NextResponse.json({ error: 'Sign in first' }, { status: 401 });
+
+    const currentVerifier = body.currentVerifier;
+    const newVerifier = body.newVerifier;
+    if (!isValidHex64(currentVerifier) || !isValidHex64(newVerifier)) {
+      return NextResponse.json({ error: 'Invalid credential encoding' }, { status: 400 });
+    }
+    if (currentVerifier === newVerifier) {
+      return NextResponse.json({ error: 'New password must be different from the current one' }, { status: 400 });
+    }
+
+    const limiterKey = `chpass:${session.userId}:${clientIp(request)}`;
+    if (await rateLimited(limiterKey)) {
+      return NextResponse.json({ error: 'Too many attempts. Try again in a few minutes.' }, { status: 429 });
+    }
+
+    const account = await getAccountById(session.userId);
+    if (!account || !verifyVerifier(currentVerifier, account.passwordHash)) {
+      return NextResponse.json({ error: 'Current password is incorrect' }, { status: 403 });
+    }
+
+    const now = new Date().toISOString();
+    const { hash } = hashVerifier(newVerifier);
+    await saveAccount({ ...account, passwordHash: hash, passwordChangedAt: now });
+    await resetAttempts(limiterKey);
+
+    // Fresh session for THIS device (survives the passwordChangedAt check
+    // because it is issued after it); other devices are logged out.
+    await deleteSession(token as string);
+    await issueSession(account.id, account.role);
+    const pii = decryptAccountPII(account);
+
+    return NextResponse.json({
+      authenticated: true,
+      user: { ...pii, role: account.role },
+      ...(await securityFlags(account.id)),
+      persistent: isDurableBackend,
+    });
+  }
+
   /* ── totp-disable: turn 2FA off (requires current password) ── */
   if (mode === 'totp-disable') {
     const jar = await cookies();

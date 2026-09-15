@@ -21,6 +21,7 @@ import {
   prepareLogin,
   prepareRegister,
   prepareReset,
+  prepareChangePassword,
   AuthServerError,
   type LoginRequest,
   type RegisterRequest,
@@ -66,6 +67,8 @@ interface AuthContextValue extends AuthState {
   confirmTotp: (code: string) => Promise<{ ok: boolean; error?: string }>;
   /** Turn 2FA off (requires the current password). */
   disableTotp: (password: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Change the signed-in account's password (requires the current one). */
+  changePassword: (currentPassword: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   /** Whether this account currently has TOTP enabled. */
   totpEnabled: boolean;
   /** Whether this account has security questions configured. */
@@ -396,6 +399,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
           if (!res.ok || !data.ok) return { ok: false, error: data.error ?? 'Could not disable 2FA' };
           setState((s) => ({ ...s, totpEnabled: false }));
+          return { ok: true };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+      },
+
+      changePassword: async (currentPassword, newPassword) => {
+        const pwError = validatePassword(newPassword);
+        if (pwError) return { ok: false, error: pwError };
+        if (currentPassword === newPassword) {
+          return { ok: false, error: 'New password must be different from the current one' };
+        }
+        let payload;
+        try {
+          payload = await prepareChangePassword(state.user?.email ?? '', currentPassword, newPassword);
+        } catch (err) {
+          return { ok: false, error: err instanceof AuthServerError ? err.message : 'Could not reach the auth service' };
+        }
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = (await res.json().catch(() => ({}))) as SessionResponse;
+          if (!res.ok) {
+            return { ok: false, error: data.error ?? 'Could not change the password' };
+          }
+          // Server re-issued this device's session (Set-Cookie applied
+          // automatically); update identity state in place.
+          applySession(data);
           return { ok: true };
         } catch {
           return { ok: false, error: 'Could not reach the auth service' };
