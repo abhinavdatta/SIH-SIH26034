@@ -2,7 +2,7 @@
    Root Layout — Inter font, SEO meta, suppressHydrationWarning for themes
    ═══════════════════════════════════════════════════════════════════════════ */
 
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { ThemeProvider } from 'next-themes';
@@ -29,6 +29,12 @@ export const metadata: Metadata = {
     description: 'Verify packaged commodity labels against Indian Legal Metrology Rules, 2011. Private by design, AI-powered.',
     type: 'website',
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#2563eb',
+  width: 'device-width',
+  initialScale: 1,
 };
 
 export default function RootLayout({
