@@ -26,6 +26,8 @@ import {
   ensureSupabaseSchema,
   isSupabaseBackend,
   isDurableBackend,
+  createAccount,
+  DuplicateAccountError,
   backendName,
   pepperSource,
   rateLimitMode,
@@ -56,6 +58,7 @@ import {
 } from '@/lib/server/auth-store';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'crypto';
 import { generateTotpSecret, verifyTotp, otpauthUrl } from '@/lib/server/totp';
+import QRCode from 'qrcode';
 
 const COOKIE_NAME = 'lmcc_session';
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -311,7 +314,10 @@ export async function POST(request: NextRequest) {
 
     const existing = await getAccount(email);
     if (existing) {
-      return NextResponse.json({ error: 'An account with this email already exists' }, { status: 409 });
+      return NextResponse.json(
+        { error: 'An account with this email already exists — try signing in instead, or reset your password from the login page.' },
+        { status: 409 }
+      );
     }
 
     const { hash } = hashVerifier(verifier);
@@ -324,7 +330,20 @@ export async function POST(request: NextRequest) {
       passwordHash: hash,
       createdAt: new Date().toISOString(),
     };
-    await saveAccount(account);
+    // createAccount is insert-only: on a same-email race the DB's unique
+    // constraint rejects the insert and we answer the friendly 409 (the
+    // pre-check above catches the common case; this catches the race).
+    try {
+      await createAccount(account);
+    } catch (err) {
+      if (err instanceof DuplicateAccountError) {
+        return NextResponse.json(
+          { error: 'An account with this email already exists — try signing in instead, or reset your password from the login page.' },
+          { status: 409 }
+        );
+      }
+      throw err;
+    }
     await indexUserId(userId, account.emailIndex);
     await resetAttempts(limiterKey);
     await issueSession(userId, role);
@@ -434,7 +453,15 @@ export async function POST(request: NextRequest) {
     existing.totpPendingSecret = encryptPII(secret);
     await saveSecurityData(session.userId, existing);
 
-    return NextResponse.json({ secret, otpauthUrl: otpauthUrl(secret, email) });
+    // QR is generated server-side (no third-party chart service ever sees
+    // the secret) and delivered as a PNG data URL the client embeds directly.
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl(secret, email), {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 220,
+    });
+
+    return NextResponse.json({ secret, otpauthUrl: otpauthUrl(secret, email), qrDataUrl });
   }
 
   /* ── totp-confirm: verify a code against the pending secret, enable 2FA ── */

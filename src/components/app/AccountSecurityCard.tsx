@@ -102,7 +102,7 @@ function SecurityQuestionsSection({ hasSaved }: { hasSaved: boolean }) {
 function TotpSection({ enabled }: { enabled: boolean }) {
   const { user, beginTotpSetup, confirmTotp, disableTotp } = useAuth();
   const [open, setOpen] = useState(false);
-  const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string; qrDataUrl?: string } | null>(null);
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -112,7 +112,7 @@ function TotpSection({ enabled }: { enabled: boolean }) {
     try {
       const result = await beginTotpSetup();
       if (result.ok && result.secret && result.otpauthUrl) {
-        setSetup({ secret: result.secret, otpauthUrl: result.otpauthUrl });
+        setSetup({ secret: result.secret, otpauthUrl: result.otpauthUrl, qrDataUrl: result.qrDataUrl });
       } else {
         toast.error('Could not start 2FA setup', { description: result.error });
       }
@@ -201,14 +201,31 @@ function TotpSection({ enabled }: { enabled: boolean }) {
         <div className="mt-3 space-y-3">
           <ol className="text-[11px] space-y-1 list-decimal list-inside" style={{ color: 'var(--text-secondary)' }}>
             <li>Open your authenticator app (Google, Microsoft, Authy, Aegis, 1Password…)</li>
-            <li>Choose “Add account” → “Enter a setup key” (manual entry)</li>
-            <li>Type the secret below (spaces optional, format: time-based)</li>
+            <li>
+              {setup.qrDataUrl
+                ? 'Scan this QR code with the app'
+                : 'Choose “Add account” → “Enter a setup key” (manual entry)'}
+            </li>
+            <li>Enter the 6-digit code it shows to finish enabling 2FA</li>
           </ol>
-          <div className="p-2.5 rounded-[var(--radius-sm)] font-mono text-xs tracking-wider break-all" style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-            {setup.secret}
-          </div>
+          {setup.qrDataUrl && (
+            <div className="flex justify-center p-2">
+              {/* Server-generated PNG data URL — no third-party chart/QS service involved. */}
+              <img
+                src={setup.qrDataUrl}
+                alt="Authenticator setup QR code"
+                width={180}
+                height={180}
+                className="rounded-[var(--radius-sm)]"
+                style={{ background: '#fff', imageRendering: 'pixelated' }}
+              />
+            </div>
+          )}
           <details className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-            <summary className="cursor-pointer">Show otpauth:// link (for apps that accept a URI)</summary>
+            <summary className="cursor-pointer">Can&apos;t scan? Enter the key manually</summary>
+            <div className="p-2.5 mt-1 rounded-[var(--radius-sm)] font-mono text-xs tracking-wider break-all" style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+              {setup.secret}
+            </div>
             <p className="break-all mt-1 font-mono">{setup.otpauthUrl}</p>
           </details>
           <form onSubmit={handleConfirm} className="flex gap-2">

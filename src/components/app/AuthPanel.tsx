@@ -52,6 +52,9 @@ export default function AuthPanel() {
   const [totpRequired, setTotpRequired] = useState(false);
   const [totpCode, setTotpCode] = useState('');
 
+  // Duplicate-account hint: "sign in instead" shortcut after a 409.
+  const [duplicateHint, setDuplicateHint] = useState(false);
+
   // Forgot-password flow state: email → questions+answers+new password → done.
   const [forgotStep, setForgotStep] = useState<'email' | 'questions' | 'done'>('email');
   const [forgotTicket, setForgotTicket] = useState('');
@@ -64,6 +67,7 @@ export default function AuthPanel() {
     setError(null);
     setTotpRequired(false);
     setTotpCode('');
+    setDuplicateHint(false);
     if (next === 'forgot') {
       setForgotStep('email');
       setForgotTicket('');
@@ -149,7 +153,12 @@ export default function AuthPanel() {
     setBusy(true);
     try {
       const result = await signUp({ name, email, employeeId, role, inviteCode, password });
-      if (!result.ok) setError(result.error ?? 'Something went wrong');
+      if (!result.ok) {
+        setError(result.error ?? 'Something went wrong');
+        setDuplicateHint(/already exists/i.test(result.error ?? ''));
+      } else {
+        setDuplicateHint(false);
+      }
     } finally {
       setBusy(false);
     }
@@ -461,6 +470,17 @@ export default function AuthPanel() {
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>{error}</span>
               </div>
+            )}
+
+            {duplicateHint && (
+              <button
+                type="button"
+                onClick={() => switchMode('signin')}
+                className="text-[11px] font-medium underline cursor-pointer"
+                style={{ color: 'var(--primary)' }}
+              >
+                Sign in to the existing account instead →
+              </button>
             )}
 
             {!(isForgot && forgotStep === 'done') && (

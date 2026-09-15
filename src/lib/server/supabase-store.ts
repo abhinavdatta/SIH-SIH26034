@@ -132,6 +132,40 @@ export async function sbSaveAccount(account: StoredAccount): Promise<void> {
   });
 }
 
+/** Thrown when another account already owns this email (unique constraint won the race). */
+export class DuplicateAccountError extends Error {
+  constructor() {
+    super('an account with this email already exists');
+    this.name = 'DuplicateAccountError';
+  }
+}
+
+/**
+ * INSERT-ONLY account creation for registration. Unlike sbSaveAccount
+ * (an upsert used for authenticated updates like password resets), this
+ * refuses to touch an existing row: on a same-email race the DB's unique
+ * constraint wins and DuplicateAccountError is thrown, so concurrent
+ * registrations can never overwrite someone's credentials.
+ */
+export async function sbCreateAccount(account: StoredAccount): Promise<void> {
+  const row: AccountRow = {
+    id: account.id,
+    email_index: account.emailIndex,
+    pii: account.pii,
+    role: account.role,
+    password_hash: account.passwordHash,
+  };
+  const saved = await rest<AccountRow[]>('/lmcc_accounts', {
+    method: 'POST',
+    // On conflict, nothing is inserted and PostgREST returns an empty array.
+    headers: { Prefer: 'resolution=ignore-duplicates,return=representation' },
+    body: JSON.stringify(row),
+  });
+  if (!saved || saved.length === 0) {
+    throw new DuplicateAccountError();
+  }
+}
+
 export async function sbGetAccountById(userId: string): Promise<StoredAccount | null> {
   const rows = await rest<AccountRow[]>(`/lmcc_accounts?select=*&id=eq.${encodeURIComponent(userId)}&limit=1`);
   return rows && rows.length > 0 ? rowToAccount(rows[0]) : null;

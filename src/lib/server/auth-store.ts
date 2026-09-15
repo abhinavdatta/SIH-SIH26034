@@ -30,6 +30,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   isSupabaseBackend,
+  sbCreateAccount,
+  DuplicateAccountError,
   sbGetSecurityData,
   sbSaveSecurityData,
   sbSaveResetTicket,
@@ -348,7 +350,34 @@ export function verifySecurityAnswer(answer: string, stored: string): boolean {
 /* ── Records ── */
 
 export type { StoredAccount } from './supabase-store';
-export { ensureSupabaseSchema, isSupabaseBackend } from './supabase-store';
+export { ensureSupabaseSchema, isSupabaseBackend, DuplicateAccountError } from './supabase-store';
+
+/**
+ * Create a NEW account (registration only). Supabase: insert-only insert
+ * guarded by the email_index unique constraint (DuplicateAccountError on
+ * races). KV backends: check-then-set, which is atomic enough there — the
+ * single-writer file/memory stores have no concurrent-instance races.
+ */
+export async function createAccount(account: StoredAccount): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbCreateAccount(account);
+    return;
+  }
+  const existing = await getAccountByEmailIndexDirect(account.emailIndex);
+  if (existing) throw new DuplicateAccountError();
+  await kvSet(accountKey(account.emailIndex), JSON.stringify(account));
+}
+
+/** KV-path helper — look up by the hashed index without the HMAC step. */
+async function getAccountByEmailIndexDirect(emailIndex: string): Promise<StoredAccount | null> {
+  const raw = await kvGet(accountKey(emailIndex));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as StoredAccount;
+  } catch {
+    return null;
+  }
+}
 
 /* ── Per-account security data (TOTP secrets, security questions) ──
 

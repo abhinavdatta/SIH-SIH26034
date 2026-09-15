@@ -60,8 +60,8 @@ interface AuthContextValue extends AuthState {
   completeReset: (email: string, ticket: string, questions: string[], answers: string[], newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   /** Save/replace the account's security-question answers. */
   saveSecurityAnswers: (answers: string[]) => Promise<{ ok: boolean; error?: string }>;
-  /** Begin authenticator setup — secret + otpauth:// URI for the QR code. */
-  beginTotpSetup: () => Promise<{ ok: boolean; secret?: string; otpauthUrl?: string; error?: string }>;
+  /** Begin authenticator setup — secret, otpauth:// URI, and server-generated QR data URL. */
+  beginTotpSetup: () => Promise<{ ok: boolean; secret?: string; otpauthUrl?: string; qrDataUrl?: string; error?: string }>;
   /** Verify a code against the pending secret and switch 2FA on. */
   confirmTotp: (code: string) => Promise<{ ok: boolean; error?: string }>;
   /** Turn 2FA off (requires the current password). */
@@ -353,11 +353,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode: 'totp-setup' }),
           });
-          const data = (await res.json().catch(() => ({}))) as { secret?: string; otpauthUrl?: string; error?: string };
+          const data = (await res.json().catch(() => ({}))) as { secret?: string; otpauthUrl?: string; qrDataUrl?: string; error?: string };
           if (!res.ok || !data.secret || !data.otpauthUrl) {
             return { ok: false, error: data.error ?? 'Could not start 2FA setup' };
           }
-          return { ok: true, secret: data.secret, otpauthUrl: data.otpauthUrl };
+          return { ok: true, secret: data.secret, otpauthUrl: data.otpauthUrl, qrDataUrl: data.qrDataUrl };
         } catch {
           return { ok: false, error: 'Could not reach the auth service' };
         }
