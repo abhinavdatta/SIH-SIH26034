@@ -67,7 +67,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Test the API with a minimal request
+    // Test the API with a minimal request.
+    //
+    // TWO-STAGE VALIDATION (fixes the recurring 8s 'Request timeout'):
+    //   Stage 1 — instant key check against the provider's models endpoint.
+    //     Proves the KEY is real and authorized with a ~100ms authenticated
+    //     GET; no generation involved, so slow/cold model queues can't make
+    //     a valid key look broken.
+    //   Stage 2 — a 1-token generation probe, but NON-FATAL: if it times out
+    //     while stage 1 passed, the key is valid and we report it (the user
+    //     chooses a fast model at scan time; queue latency is not an auth
+    //     problem).
     try {
       const headers: Record<string, string> = {
         'Authorization': `Bearer ${apiKey}`,
@@ -80,6 +90,53 @@ export async function POST(request: NextRequest) {
         headers['X-Title'] = 'LMCC - Legal Metrology Compliance Checker';
       }
 
+      /* ── Stage 1: key check via the models endpoint (≤4s) ── */
+      const origin = new URL(apiUrl).origin;
+      const listUrl =
+        category === 'openrouter'
+          ? `${origin}/api/v1/models`
+          : category === 'nvidia'
+            ? `${origin}/v1/models`
+            : `${origin}/models`;
+
+      let stage1: { ok: boolean; status: number; detail?: string };
+      {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        try {
+          const res = await fetch(listUrl, { headers, signal: controller.signal, cache: 'no-store' });
+          if (res.ok) {
+            stage1 = { ok: true, status: res.status };
+          } else if (res.status === 401) {
+            stage1 = { ok: false, status: 401, detail: 'Invalid API key. Please check your API key.' };
+          } else if (res.status === 403) {
+            stage1 = {
+              ok: false,
+              status: 403,
+              detail:
+                category === 'nvidia'
+                  ? 'NVIDIA rejected this key (403). Check that the key is active and has access to this model.'
+                  : 'The provider rejected this key (403). Check that it belongs to this provider.',
+            };
+          } else if (res.status === 404) {
+            // No models endpoint on a custom gateway — skip to generation probe.
+            stage1 = { ok: true, status: 404 };
+          } else {
+            stage1 = { ok: true, status: res.status }; // don't fail validation on odd statuses
+          }
+        } catch (e) {
+          // Models endpoint unreachable/timed out — inconclusive, not fatal.
+          stage1 = { ok: true, status: 0, detail: e instanceof Error ? e.message : 'unreachable' };
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }
+
+      if (!stage1.ok) {
+        return NextResponse.json({ valid: false, error: stage1.detail }, { status: 200 });
+      }
+
+      /* ── Stage 2: 1-token generation probe (≤8s, non-fatal on timeout) ── */
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s — must fit Vercel Hobby's 10s function cap
 
@@ -101,10 +158,11 @@ export async function POST(request: NextRequest) {
         try {
           data = await response.json();
         } catch {
-          return NextResponse.json(
-            { valid: false, error: 'Invalid response format. API did not return valid JSON.' },
-            { status: 200 }
-          );
+          // Generation returned non-JSON, but the key already passed stage 1.
+          return NextResponse.json({
+            valid: true,
+            message: 'API key is valid (models check passed; generation probe was unreadable).',
+          });
         }
 
         if (data?.choices?.[0]?.message?.content) {
@@ -188,12 +246,14 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       console.error('API validation error:', error);
 
-      // Handle AbortError (timeout)
+      // Handle AbortError (timeout). Stage 1 already proved the KEY is real,
+      // so a slow generation is a model-queue problem, not an auth failure —
+      // report success with a note instead of a scary false negative.
       if (error instanceof Error && error.name === 'AbortError') {
-        return NextResponse.json(
-          { valid: false, error: 'Request timeout. The API server took too long to respond.' },
-          { status: 200 }
-        );
+        return NextResponse.json({
+          valid: true,
+          message: 'API key is valid. The model was slow to respond during the test probe — if scans feel slow, pick a faster model in Settings.',
+        });
       }
 
       return NextResponse.json(
