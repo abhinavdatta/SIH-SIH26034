@@ -103,6 +103,7 @@ function TotpSection({ enabled }: { enabled: boolean }) {
   const { user, beginTotpSetup, confirmTotp, disableTotp } = useAuth();
   const [open, setOpen] = useState(false);
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string; qrDataUrl?: string } | null>(null);
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -123,18 +124,20 @@ function TotpSection({ enabled }: { enabled: boolean }) {
 
   async function handleConfirm(e: React.FormEvent) {
     e.preventDefault();
-    if (!/^\d{6}$/.test(code.trim())) {
+    // Backup codes (xxxxx-xxxxx) are also accepted here for convenience.
+    const cleaned = code.trim().toUpperCase();
+    if (!/^\d{6}$/.test(cleaned) && !/^[A-Z0-9]{10}$/.test(cleaned.replace(/[^A-Z0-9]/g, ''))) {
       toast.error('Enter the 6-digit code from your authenticator app');
       return;
     }
     setBusy(true);
     try {
-      const result = await confirmTotp(code);
+      const result = await confirmTotp(cleaned);
       if (result.ok) {
-        toast.success('Authenticator 2FA enabled', { description: 'You will be asked for a code on every sign-in.' });
-        setOpen(false);
+        setBackupCodes(result.backupCodes ?? []);
         setSetup(null);
         setCode('');
+        toast.success('Authenticator 2FA enabled');
       } else {
         toast.error('Verification failed', { description: result.error });
       }
@@ -245,6 +248,52 @@ function TotpSection({ enabled }: { enabled: boolean }) {
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Verify'}
             </button>
           </form>
+        </div>
+      )}
+
+      {/* Backup codes — shown ONCE right after enabling 2FA. */}
+      {backupCodes && (
+        <div className="mt-3 rounded-[var(--radius-sm)] p-3" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}>
+          <p className="text-xs font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+            Save your backup codes now
+          </p>
+          <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
+            Each works once in place of a 6-digit code (e.g. if your phone is dead). Shown only this once.
+          </p>
+          <div className="grid grid-cols-2 gap-1 font-mono text-[11px]" style={{ color: 'var(--text-primary)' }}>
+            {backupCodes.map((c) => (
+              <span key={c}>{c}</span>
+            ))}
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button
+              type="button"
+              className="btn-ghost text-[11px]"
+              onClick={() => {
+                void navigator.clipboard.writeText(backupCodes.join('\n'));
+                toast.success('Backup codes copied');
+              }}
+            >
+              Copy all
+            </button>
+            <button
+              type="button"
+              className="btn-ghost text-[11px]"
+              onClick={() => {
+                const url = URL.createObjectURL(new Blob([backupCodes.join('\n')], { type: 'text/plain' }));
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'lmcc-backup-codes.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              Download
+            </button>
+            <button type="button" className="btn-primary text-[11px] ml-auto" onClick={() => setBackupCodes(null)}>
+              I&apos;ve saved them
+            </button>
+          </div>
         </div>
       )}
 

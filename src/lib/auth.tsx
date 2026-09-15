@@ -63,8 +63,9 @@ interface AuthContextValue extends AuthState {
   saveSecurityAnswers: (answers: string[]) => Promise<{ ok: boolean; error?: string }>;
   /** Begin authenticator setup — secret, otpauth:// URI, and server-generated QR data URL. */
   beginTotpSetup: () => Promise<{ ok: boolean; secret?: string; otpauthUrl?: string; qrDataUrl?: string; error?: string }>;
-  /** Verify a code against the pending secret and switch 2FA on. */
-  confirmTotp: (code: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Verify a code against the pending secret, switch 2FA on, and issue
+   * ten single-use backup codes (shown once). */
+  confirmTotp: (code: string) => Promise<{ ok: boolean; backupCodes?: string[]; error?: string }>;
   /** Turn 2FA off (requires the current password). */
   disableTotp: (password: string) => Promise<{ ok: boolean; error?: string }>;
   /** Change the signed-in account's password (requires the current one). */
@@ -373,10 +374,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode: 'totp-confirm', code }),
           });
-          const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+          const data = (await res.json().catch(() => ({}))) as { ok?: boolean; backupCodes?: string[]; error?: string };
           if (!res.ok || !data.ok) return { ok: false, error: data.error ?? 'Could not confirm' };
           setState((s) => ({ ...s, totpEnabled: true }));
-          return { ok: true };
+          return { ok: true, backupCodes: data.backupCodes };
         } catch {
           return { ok: false, error: 'Could not reach the auth service' };
         }

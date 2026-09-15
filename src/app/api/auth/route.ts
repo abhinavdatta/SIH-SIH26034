@@ -387,14 +387,27 @@ export async function POST(request: NextRequest) {
         console.error(`[auth] unreadable TOTP secret for ${account.id} — 2FA check skipped`);
       } else if (!totpCode) {
         return NextResponse.json(
-          { error: 'Enter the 6-digit code from your authenticator app', totpRequired: true },
+          { error: 'Enter the 6-digit code from your authenticator app (or a backup code)', totpRequired: true },
           { status: 401 }
         );
       } else if (!verifyTotp(secret, totpCode)) {
-        return NextResponse.json(
-          { error: 'Invalid authenticator code', totpRequired: true },
-          { status: 401 }
-        );
+        // Not a valid TOTP code — accept a single-use BACKUP code instead
+        // (format xxxxx-xxxxx; normalized so dashes/spaces are optional).
+        const codes = Array.isArray(sec.backupCodes) ? (sec.backupCodes as string[]) : [];
+        const normalized = totpCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const candidate = createHash('sha256').update(normalized).digest('hex');
+        const idx = codes.indexOf(candidate);
+        if (idx === -1) {
+          return NextResponse.json(
+            { error: 'Invalid authenticator code', totpRequired: true },
+            { status: 401 }
+          );
+        }
+        // Consume: single-use, then persist the shortened list.
+        codes.splice(idx, 1);
+        sec.backupCodes = codes;
+        await saveSecurityData(account.id, sec);
+        console.log(`[auth] backup code consumed for ${account.id} (${codes.length} remaining)`);
       }
     }
 
@@ -464,7 +477,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ secret, otpauthUrl: otpauthUrl(secret, email), qrDataUrl });
   }
 
-  /* ── totp-confirm: verify a code against the pending secret, enable 2FA ── */
+  /* ── totp-confirm: verify a code against the pending secret, enable 2FA.
+     On success, issues TEN single-use backup codes (shown once, stored as
+     sha256 hashes) so a lost phone doesn't lock the account. ── */
   if (mode === 'totp-confirm') {
     const jar = await cookies();
     const token = jar.get(COOKIE_NAME)?.value;
@@ -484,8 +499,18 @@ export async function POST(request: NextRequest) {
     sec.totpSecret = sec.totpPendingSecret;
     sec.totpEnabled = true;
     delete sec.totpPendingSecret;
+    // Backup codes: 40 bits of entropy each (rate-limited guessing is the
+    // only vector, and they're single-use). Stored as sha256 hashes of the
+    // NORMALIZED form (uppercase, alphanumeric only) — the login path must
+    // hash the exact same normalized shape, or nothing ever matches.
+    const normalizeCode = (c: string) => c.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const backupCodes = Array.from({ length: 10 }, () => {
+      const raw = randomBytes(5).toString('hex').toUpperCase();
+      return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+    });
+    sec.backupCodes = backupCodes.map((c) => createHash('sha256').update(normalizeCode(c)).digest('hex'));
     await saveSecurityData(session.userId, sec);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, backupCodes });
   }
 
   /* ── change-password: signed-in user rotates their own password ──
