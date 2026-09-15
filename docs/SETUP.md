@@ -48,8 +48,10 @@ Vercel → Settings → Environment Variables for deployments):
 
 ```env
 # ── RECOMMENDED: Supabase Postgres (accounts/sessions/scans) ──
-# 1. Run supabase/migrations/0001_lmcc_auth.sql once (SQL Editor)
-# 2. Project Settings → API → Project URL + service_role secret
+# 1. Run BOTH migrations once (SQL Editor): supabase/migrations/0001_lmcc_auth.sql
+#    (accounts/sessions/scans/limits) AND 0002_account_security.sql (2FA +
+#    security questions + reset tickets)
+# 2. Project Settings → API Keys → Project URL + service_role secret
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 

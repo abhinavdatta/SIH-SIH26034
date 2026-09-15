@@ -17,7 +17,14 @@
 'use client';
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { prepareLogin, prepareRegister, AuthServerError, type LoginRequest, type RegisterRequest } from './auth-crypto';
+import {
+  prepareLogin,
+  prepareRegister,
+  prepareReset,
+  AuthServerError,
+  type LoginRequest,
+  type RegisterRequest,
+} from './auth-crypto';
 
 export type UserRole = 'seller' | 'compliance_officer';
 
@@ -36,13 +43,33 @@ export interface AuthState {
   persistent: boolean;
   /** Officer sign-up is possible on this deployment (invite codes configured server-side). */
   officerRegistration: boolean;
+  /** Authenticator 2FA is active for the signed-in account. */
+  totpEnabled: boolean;
+  /** Security questions are configured for the signed-in account. */
+  hasSecurityAnswers: boolean;
 }
 
 interface AuthContextValue extends AuthState {
-  signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  signIn: (email: string, password: string, totpCode?: string) => Promise<{ ok: boolean; error?: string; totpRequired?: boolean }>;
   signUp: (input: { name: string; email: string; employeeId: string; role: UserRole; inviteCode?: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
+  /** Begin a password reset — returns the ticket + the three questions. */
+  startForgotPassword: (email: string) => Promise<{ ok: boolean; ticket?: string; questions?: string[]; error?: string }>;
+  /** Complete a password reset (correct answers → signed in on the spot). */
+  completeReset: (email: string, ticket: string, questions: string[], answers: string[], newPassword: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Save/replace the account's security-question answers. */
+  saveSecurityAnswers: (answers: string[]) => Promise<{ ok: boolean; error?: string }>;
+  /** Begin authenticator setup — secret + otpauth:// URI for the QR code. */
+  beginTotpSetup: () => Promise<{ ok: boolean; secret?: string; otpauthUrl?: string; error?: string }>;
+  /** Verify a code against the pending secret and switch 2FA on. */
+  confirmTotp: (code: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Turn 2FA off (requires the current password). */
+  disableTotp: (password: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Whether this account currently has TOTP enabled. */
+  totpEnabled: boolean;
+  /** Whether this account has security questions configured. */
+  hasSecurityAnswers: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -89,6 +116,10 @@ interface SessionResponse {
   persistent?: boolean;
   /** Whether officer registration is open on this deployment (invite codes configured). */
   officerRegistration?: boolean;
+  /** 2FA state for the signed-in account. */
+  totpEnabled?: boolean;
+  /** Security questions configured for the signed-in account. */
+  hasSecurityAnswers?: boolean;
   error?: string;
 }
 
@@ -115,6 +146,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hydrated: false,
     persistent: false,
     officerRegistration: false,
+    totpEnabled: false,
+    hasSecurityAnswers: false,
   });
 
   const applySession = useMemo(
@@ -125,6 +158,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         hydrated: true,
         persistent: Boolean(data.persistent),
         officerRegistration: Boolean(data.officerRegistration),
+        totpEnabled: Boolean(data.totpEnabled),
+        hasSecurityAnswers: Boolean(data.hasSecurityAnswers),
       });
     },
     []
@@ -147,6 +182,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         hydrated: true,
         persistent: Boolean(data.persistent),
         officerRegistration: Boolean(data.officerRegistration),
+        totpEnabled: Boolean(data.totpEnabled),
+        hasSecurityAnswers: Boolean(data.hasSecurityAnswers),
       });
     });
     // Legacy local-account cleanup (pre-server auth) — remove stale keys.
@@ -165,10 +202,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       ...state,
       refresh,
-      signIn: async (email, password) => {
+      signIn: async (email, password, totpCode) => {
         let payload: LoginRequest;
         try {
-          payload = await prepareLogin(email, password);
+          payload = await prepareLogin(email, password, totpCode);
         } catch (err) {
           return { ok: false, error: err instanceof AuthServerError ? err.message : 'Could not reach the auth service' };
         }
@@ -180,9 +217,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
           const data = (await res.json().catch(() => ({}))) as SessionResponse;
           if (!res.ok || !data.authenticated) {
-            // Surface the server's actual reason (e.g. the 503 setup guidance)
-            // instead of a generic network-failure message.
-            return { ok: false, error: data.error ?? 'Invalid email or password' };
+            // Surface the server's actual reason (e.g. the 503 setup guidance,
+            // or totpRequired when the account has 2FA on) instead of a
+            // generic network-failure message.
+            return {
+              ok: false,
+              error: data.error ?? 'Invalid email or password',
+              totpRequired: (data as { totpRequired?: boolean }).totpRequired === true,
+            };
           }
           applySession(data);
           // Pull this account's scans onto the device (cross-device sync).
@@ -241,7 +283,123 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Best effort
         }
         currentUser = null;
-        setState({ user: null, hydrated: true, persistent: state.persistent, officerRegistration: state.officerRegistration });
+        setState({ user: null, hydrated: true, persistent: state.persistent, officerRegistration: state.officerRegistration, totpEnabled: false, hasSecurityAnswers: false });
+      },
+
+      startForgotPassword: async (email) => {
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'forgot-start', email }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { ticket?: string; questions?: string[]; error?: string };
+          if (!res.ok || !data.ticket || !data.questions) {
+            return { ok: false, error: data.error ?? 'Could not start the reset' };
+          }
+          return { ok: true, ticket: data.ticket, questions: data.questions };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+      },
+
+      completeReset: async (email, ticket, questions, answers, newPassword) => {
+        const pwError = validatePassword(newPassword);
+        if (pwError) return { ok: false, error: pwError };
+        let payload;
+        try {
+          payload = await prepareReset(email, newPassword, answers, ticket);
+        } catch (err) {
+          return { ok: false, error: err instanceof AuthServerError ? err.message : 'Could not reach the auth service' };
+        }
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = (await res.json().catch(() => ({}))) as SessionResponse;
+          if (!res.ok || !data.authenticated) {
+            return { ok: false, error: data.error ?? 'Reset failed' };
+          }
+          applySession(data);
+          void import('./scan-sync').then(({ startScanSync }) => startScanSync());
+          return { ok: true };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+      },
+
+      saveSecurityAnswers: async (answers) => {
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'security-save', a1: answers[0] ?? '', a2: answers[1] ?? '', a3: answers[2] ?? '' }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+          if (!res.ok || !data.ok) return { ok: false, error: data.error ?? 'Could not save' };
+          setState((s) => ({ ...s, hasSecurityAnswers: true }));
+          return { ok: true };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+      },
+
+      beginTotpSetup: async () => {
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'totp-setup' }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { secret?: string; otpauthUrl?: string; error?: string };
+          if (!res.ok || !data.secret || !data.otpauthUrl) {
+            return { ok: false, error: data.error ?? 'Could not start 2FA setup' };
+          }
+          return { ok: true, secret: data.secret, otpauthUrl: data.otpauthUrl };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+      },
+
+      confirmTotp: async (code) => {
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'totp-confirm', code }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+          if (!res.ok || !data.ok) return { ok: false, error: data.error ?? 'Could not confirm' };
+          setState((s) => ({ ...s, totpEnabled: true }));
+          return { ok: true };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
+      },
+
+      disableTotp: async (password) => {
+        let verifier: string;
+        try {
+          const payload = await prepareLogin(state.user?.email ?? '', password);
+          verifier = payload.verifier;
+        } catch (err) {
+          return { ok: false, error: err instanceof AuthServerError ? err.message : 'Could not reach the auth service' };
+        }
+        try {
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'totp-disable', verifier }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+          if (!res.ok || !data.ok) return { ok: false, error: data.error ?? 'Could not disable 2FA' };
+          setState((s) => ({ ...s, totpEnabled: false }));
+          return { ok: true };
+        } catch {
+          return { ok: false, error: 'Could not reach the auth service' };
+        }
       },
     }),
     [state, applySession, refresh]

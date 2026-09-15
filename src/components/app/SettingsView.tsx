@@ -12,6 +12,7 @@ import { notifyDataChange } from '@/lib/hooks';
 import { seedDemoData } from '@/lib/local-data';
 import { getLiteModePref, setLiteModePref, isLiteMode, getLiteModeRecommendation, type LiteModePref } from '@/lib/lite-mode';
 import { useAuth, REPO_URL, WATERMARK_LINE, ROLE_LABELS } from '@/lib/auth';
+import AccountSecurityCard from './AccountSecurityCard';
 import { TERMS_SECTIONS, PRIVACY_SECTIONS } from '@/lib/legal-content';
 import LegalAccordion from './LegalAccordion';
 import {
@@ -262,6 +263,7 @@ export default function SettingsView() {
               This identity is stamped into every exported PDF, CSV, and training file. Your account works from any
               device; scans sync to it automatically. Sign-out clears data from this browser only.
             </p>
+            <AccountSecurityCard />
           </div>
         ) : (
           <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Not signed in.</p>

@@ -46,8 +46,13 @@ export async function ensureSupabaseSchema(): Promise<boolean> {
   if (schemaCache?.ok) return true;
   if (schemaCache && Date.now() - schemaCache.at < 15_000) return schemaCache.ok;
   try {
-    const res = await fetch(`${REST}/lmcc_accounts?select=id&limit=1`, { headers: { ...HEADERS }, cache: 'no-store' });
-    const ok = res.ok;
+    // Both migrations must be present: 0001 (accounts/sessions/scans/limits)
+    // and 0002 (security settings + reset tickets).
+    const [acct, sec] = await Promise.all([
+      fetch(`${REST}/lmcc_accounts?select=id&limit=1`, { headers: { ...HEADERS }, cache: 'no-store' }),
+      fetch(`${REST}/lmcc_security?select=user_id&limit=1`, { headers: { ...HEADERS }, cache: 'no-store' }),
+    ]);
+    const ok = acct.ok && sec.ok;
     schemaCache = { ok, at: Date.now() };
     return ok;
   } catch {
@@ -75,6 +80,7 @@ interface AccountRow {
   pii: string;
   role: 'seller' | 'compliance_officer';
   password_hash: string;
+  password_changed_at?: string | null;
   created_at?: string;
 }
 
@@ -84,6 +90,8 @@ export interface StoredAccount {
   pii: string;
   role: 'seller' | 'compliance_officer';
   passwordHash: string;
+  /** Sessions issued before this instant are invalid (password was reset). */
+  passwordChangedAt?: string;
   createdAt: string;
 }
 
@@ -94,6 +102,7 @@ function rowToAccount(r: AccountRow): StoredAccount {
     pii: r.pii,
     role: r.role,
     passwordHash: r.password_hash,
+    ...(r.password_changed_at ? { passwordChangedAt: r.password_changed_at } : {}),
     createdAt: r.created_at ?? new Date().toISOString(),
   };
 }
@@ -114,6 +123,7 @@ export async function sbSaveAccount(account: StoredAccount): Promise<void> {
     pii: account.pii,
     role: account.role,
     password_hash: account.passwordHash,
+    ...(account.passwordChangedAt ? { password_changed_at: account.passwordChangedAt } : {}),
   };
   await rest('/lmcc_accounts', {
     method: 'POST',
@@ -195,6 +205,64 @@ export async function sbSaveUserScans(userId: string, scansJson: string): Promis
     headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify({ user_id: userId, scans: JSON.parse(scansJson) }),
   });
+}
+
+/* ── Per-account security settings (TOTP, security questions) ──
+
+   One jsonb row per user. Sensitive values inside `data` are stored
+   ALREADY-encrypted by the caller (AES-256-GCM envelope), so the DB
+   never sees a usable TOTP secret or question answer. */
+
+export async function sbGetSecurityData(userId: string): Promise<string | null> {
+  const rows = await rest<{ data: unknown }[]>(
+    `/lmcc_security?select=data&user_id=eq.${encodeURIComponent(userId)}&limit=1`
+  );
+  if (!rows || rows.length === 0) return null;
+  return typeof rows[0].data === 'string' ? rows[0].data : JSON.stringify(rows[0].data);
+}
+
+export async function sbSaveSecurityData(userId: string, dataJson: string): Promise<void> {
+  await rest('/lmcc_security', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ user_id: userId, data: JSON.parse(dataJson) }),
+  });
+}
+
+/* ── Password-reset tickets ── */
+
+interface TicketRow {
+  ticket_hash: string;
+  user_id: string;
+  attempts: number;
+  expires_at: string;
+}
+
+export async function sbSaveResetTicket(ticketHash: string, userId: string, expiresAt: string): Promise<void> {
+  await rest('/lmcc_reset_tickets', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ ticket_hash: ticketHash, user_id: userId, expires_at: expiresAt }),
+  });
+}
+
+export async function sbGetResetTicket(ticketHash: string): Promise<{ userId: string; attempts: number; expiresAt: string } | null> {
+  const rows = await rest<TicketRow[]>(
+    `/lmcc_reset_tickets?select=ticket_hash,user_id,attempts,expires_at&ticket_hash=eq.${encodeURIComponent(ticketHash)}&limit=1`
+  );
+  if (!rows || rows.length === 0) return null;
+  return { userId: rows[0].user_id, attempts: rows[0].attempts, expiresAt: rows[0].expires_at };
+}
+
+export async function sbUpdateResetTicketAttempts(ticketHash: string, attempts: number): Promise<void> {
+  await rest(`/lmcc_reset_tickets?ticket_hash=eq.${encodeURIComponent(ticketHash)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ attempts }),
+  });
+}
+
+export async function sbDeleteResetTicket(ticketHash: string): Promise<void> {
+  await rest(`/lmcc_reset_tickets?ticket_hash=eq.${encodeURIComponent(ticketHash)}`, { method: 'DELETE' });
 }
 
 /* ── Durable fixed-window rate limiting ──

@@ -50,6 +50,8 @@ export interface LoginRequest {
   mode: 'login';
   email: string;
   verifier: string;
+  /** 6-digit authenticator code — required when the account has 2FA on. */
+  totpCode?: string;
 }
 
 /** Error whose message came from the server (setup guidance, 403s, etc.). */
@@ -103,10 +105,26 @@ export async function prepareRegister(input: {
 
 /**
  * Login flow: fetch this account's salt, derive the verifier locally
- * (same 150k iterations), send only the verifier.
+ * (same 150k iterations), send only the verifier. When the account has
+ * 2FA enabled the server replies totpRequired and the SAME verifier is
+ * resent with the authenticator code — no re-derivation needed.
  */
-export async function prepareLogin(email: string, password: string): Promise<LoginRequest> {
+export async function prepareLogin(email: string, password: string, totpCode?: string): Promise<LoginRequest> {
   const salt = await fetchChallengeSalt(email.trim().toLowerCase());
   const verifier = await pbkdf2(password, salt);
-  return { mode: 'login', email: email.trim().toLowerCase(), verifier };
+  return { mode: 'login', email: email.trim().toLowerCase(), verifier, ...(totpCode ? { totpCode } : {}) };
+}
+
+/** Password-reset flow: derive a verifier for the NEW password using the
+ * account's challenge salt (same derivation as login — after the reset,
+ * login just works with the new password). */
+export async function prepareReset(
+  email: string,
+  newPassword: string,
+  answers: string[],
+  ticket: string
+): Promise<{ mode: 'forgot-reset'; ticket: string; answers: string[]; newVerifier: string }> {
+  const salt = await fetchChallengeSalt(email.trim().toLowerCase());
+  const newVerifier = await pbkdf2(newPassword, salt);
+  return { mode: 'forgot-reset', ticket, answers, newVerifier };
 }

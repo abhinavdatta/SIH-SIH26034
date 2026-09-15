@@ -30,6 +30,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   isSupabaseBackend,
+  sbGetSecurityData,
+  sbSaveSecurityData,
+  sbSaveResetTicket,
+  sbGetResetTicket,
+  sbUpdateResetTicketAttempts,
+  sbDeleteResetTicket,
   sbGetAccountByEmailIndex,
   sbSaveAccount,
   sbGetAccountById,
@@ -313,10 +319,118 @@ export function verifyVerifier(clientVerifier: string, stored: string): boolean 
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/* ── Security-question answer hashing ──
+
+   Answers are low-entropy, so they get the same scrypt stretching as
+   verifiers. Normalization (trim, lowercase, collapse spaces) keeps
+   'MyDog  Rex' and 'mydog rex' equivalent without weakening storage. */
+
+export function normalizeSecurityAnswer(answer: string): string {
+  return answer.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function hashSecurityAnswer(answer: string): string {
+  const salt = randomBytes(16).toString('hex');
+  const hash = scryptSync(normalizeSecurityAnswer(answer), salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+  return `q1$${salt}$${hash}`;
+}
+
+export function verifySecurityAnswer(answer: string, stored: string): boolean {
+  const parts = stored.split('$');
+  if (parts.length !== 3 || parts[0] !== 'q1') return false;
+  const [, salt, storedHash] = parts;
+  const recomputed = scryptSync(normalizeSecurityAnswer(answer), salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+  const a = Buffer.from(recomputed);
+  const b = Buffer.from(storedHash);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /* ── Records ── */
 
 export type { StoredAccount } from './supabase-store';
 export { ensureSupabaseSchema, isSupabaseBackend } from './supabase-store';
+
+/* ── Per-account security data (TOTP secrets, security questions) ──
+
+   One JSON blob per user. TOTP secrets and question answers go in
+   AES-256-GCM envelopes BEFORE hitting the store — identical treat-
+   ment to PII. Supabase keeps it in lmcc_security; KV backends get
+   a namespaced key. */
+
+const SECURITY_PREFIX = 'lmcc:sec:';
+
+export async function getSecurityData(userId: string): Promise<Record<string, unknown> | null> {
+  const raw = isSupabaseBackend ? await sbGetSecurityData(userId) : await kvGet(`${SECURITY_PREFIX}${userId}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSecurityData(userId: string, data: Record<string, unknown>): Promise<void> {
+  const json = JSON.stringify(data);
+  if (isSupabaseBackend) {
+    await sbSaveSecurityData(userId, json);
+    return;
+  }
+  await kvSet(`${SECURITY_PREFIX}${userId}`, json);
+}
+
+/* ── Password-reset tickets (id stored hashed, 15-min TTL) ── */
+
+export interface ResetTicket {
+  userId: string;
+  attempts: number;
+  expiresAt: string;
+}
+
+const TICKET_PREFIX = 'lmcc:ticket:';
+
+export async function saveResetTicket(ticketHash: string, userId: string, expiresAt: string): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbSaveResetTicket(ticketHash, userId, expiresAt);
+    return;
+  }
+  await kvSet(`${TICKET_PREFIX}${ticketHash}`, JSON.stringify({ userId, attempts: 0, expiresAt }));
+}
+
+export async function getResetTicket(ticketHash: string): Promise<ResetTicket | null> {
+  if (isSupabaseBackend) {
+    return sbGetResetTicket(ticketHash);
+  }
+  const raw = await kvGet(`${TICKET_PREFIX}${ticketHash}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ResetTicket;
+  } catch {
+    return null;
+  }
+}
+
+export async function updateResetTicketAttempts(ticketHash: string, attempts: number): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbUpdateResetTicketAttempts(ticketHash, attempts);
+    return;
+  }
+  const raw = await kvGet(`${TICKET_PREFIX}${ticketHash}`);
+  if (!raw) return;
+  try {
+    const t = JSON.parse(raw) as ResetTicket;
+    await kvSet(`${TICKET_PREFIX}${ticketHash}`, JSON.stringify({ ...t, attempts }));
+  } catch {
+    // Ignore
+  }
+}
+
+export async function deleteResetTicket(ticketHash: string): Promise<void> {
+  if (isSupabaseBackend) {
+    await sbDeleteResetTicket(ticketHash);
+    return;
+  }
+  await kvDel(`${TICKET_PREFIX}${ticketHash}`);
+}
 
 export function accountKey(emailIndex: string): string {
   return `lmcc:acct:${emailIndex}`;
