@@ -35,6 +35,8 @@ export const viewport: Viewport = {
   themeColor: '#2563eb',
   width: 'device-width',
   initialScale: 1,
+  // Lets env(safe-area-inset-*) resolve on notched phones (PWA/standalone).
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({

@@ -981,7 +981,7 @@ export default function AIProvidersView() {
           </div>
 
           {/* Default OpenRouter Providers */}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-1">
             {defaultOpenRouterProviders.map((provider) => (
               <Card key={provider.id} className="card-static">
                 <CardHeader className="pb-3">
@@ -1250,7 +1250,7 @@ export default function AIProvidersView() {
                   {customOpenRouterProviders.length} configured
                 </Badge>
               </div>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-1">
                 {customOpenRouterProviders.map((provider) => (
                   <Card key={provider.id} className="card-static border-2" style={{ borderColor: 'var(--primary-light)' }}>
                     <CardHeader className="pb-3">
@@ -1678,7 +1678,7 @@ export default function AIProvidersView() {
             </Badge>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-1">
             {defaultNvidiaProviders.map((provider) => (
               <Card key={provider.id} className="card-static">
                 <CardHeader className="pb-3">
@@ -1937,7 +1937,7 @@ export default function AIProvidersView() {
                   {customNvidiaProviders.length} configured
                 </Badge>
               </div>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-1">
                 {customNvidiaProviders.map((provider) => (
                   <Card key={provider.id} className="card-static border-2" style={{ borderColor: 'var(--primary-light)' }}>
                     <CardHeader className="pb-3">

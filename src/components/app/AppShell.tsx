@@ -338,7 +338,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>
+    <div
+      className="app-viewport flex overflow-hidden"
+      style={{ background: 'var(--bg-page)' }}
+    >
       <SkipLink />
       {/* ── Desktop Sidebar (≥1024px) ── */}
       <aside
@@ -402,11 +405,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* ── Footer (fixed at bottom, outside scroll) ── */}
         <footer
-          className="shrink-0 h-10 flex items-center justify-center border-t px-4"
-          style={{ background: 'var(--bg-header)', borderColor: 'var(--border-light)' }}
+          className="shrink-0 min-h-10 flex items-center justify-center border-t px-4 py-1.5"
+          style={{
+            background: 'var(--bg-header)',
+            borderColor: 'var(--border-light)',
+            paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))',
+          }}
           role="contentinfo"
         >
-          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <p
+            className="text-[10px] sm:text-[11px] text-center"
+            style={{ color: 'var(--text-muted)' }}
+          >
             © {new Date().getFullYear()} SIH26034 LMCC — Dept. of Consumer Affairs, Government of India ·{' '}
             <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: 'var(--primary)' }}>
               {WATERMARK_LINE}

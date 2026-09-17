@@ -17,6 +17,8 @@ dist/
 .env.test.local
 .env.production.local
 *.pem
+AUTH_PEPPER.txt
+AUTH_PEPPER*
 
 # ── Logs ──
 server.log

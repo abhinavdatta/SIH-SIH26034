@@ -333,8 +333,9 @@ export default function ComplianceReportView() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
-      {/* Back + Header */}
-      <div className="flex items-center gap-3">
+      {/* Back + Header — wraps on phones so the action icons never
+          squash the product name or overlap the badges */}
+      <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={() => setCurrentView('dashboard')}
           className="btn-ghost !p-2"
@@ -342,16 +343,18 @@ export default function ComplianceReportView() {
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-lg font-bold truncate" style={{ color: 'var(--text-primary)' }}>{scan.productName}</h2>
+        <div className="flex-1 min-w-[140px]">
+          <h2 className="text-lg font-bold break-words" style={{ color: 'var(--text-primary)' }}>{scan.productName}</h2>
           <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
             {scan.manufacturerName} · {new Date(scan.createdAt).toLocaleDateString('en-IN')}
           </p>
         </div>
-        <Badge variant="outline" className={`text-xs font-medium shrink-0 ${STATUS_COLORS[scan.status] ?? ''}`}>
-          {scan.status.replace(/_/g, ' ')}
-        </Badge>
-        <ConfidenceBadge score={scan.ocrConfidence} showScore size="md" />
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge variant="outline" className={`text-xs font-medium ${STATUS_COLORS[scan.status] ?? ''}`}>
+            {scan.status.replace(/_/g, ' ')}
+          </Badge>
+          <ConfidenceBadge score={scan.ocrConfidence} showScore size="md" />
+        </div>
         <div className="flex gap-2">
           <button
             onClick={exportToPDF}
@@ -373,7 +376,7 @@ export default function ComplianceReportView() {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <div className="card-static p-4 text-center">
           <p className="text-2xl font-bold tabular-nums" style={{ color: 'var(--success)' }}>
             {scan.fields.filter(f => f.complianceStatus === 'compliant').length}

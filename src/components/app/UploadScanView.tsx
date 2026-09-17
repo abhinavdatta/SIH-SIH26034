@@ -403,7 +403,7 @@ export default function UploadScanView() {
       {!result && !scanning && (
         <div className="card-static p-4">
           <p className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>Select Scan Mode:</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <button
               onClick={() => { setScanMode('demo'); setSelectedProduct(null); setUploadedFile(null); }}
               className={`p-4 rounded-[var(--radius-md)] border-2 text-left transition-all ${

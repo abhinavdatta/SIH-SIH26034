@@ -13,6 +13,12 @@
  */
 @source "../";
 
+/* Extra-small breakpoint: below ~480px, phones get single-column layouts
+   for two-up card grids that are too tight to read side-by-side. */
+@theme {
+  --breakpoint-xs: 30rem;
+}
+
 
 /* ── Design Tokens ── */
 
@@ -45,8 +51,16 @@
   --bg-header: #FFFFFF;
   --bg-input: #F1F5F9;
   --bg-hover: #F1F5F9;
+  /* Aliases used by several views — kept in lockstep with the tokens above
+     so panels/inputs never render transparent (they previously resolved to
+     nothing, breaking mobile layouts where the page background shows through). */
+  --bg-primary: #F1F5F9;
+  --bg-secondary: #F1F5F9;
   --border-default: #E2E8F0;
   --border-light: #F1F5F9;
+  --border-hover: #94A3B8;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
 
   /* Text */
   --text-primary: #0F172A;
@@ -112,8 +126,13 @@
   --bg-header: #111827;
   --bg-input: #1E293B;
   --bg-hover: #1E293B;
+  --bg-primary: #1E293B;
+  --bg-secondary: #1E293B;
   --border-default: #1E293B;
   --border-light: #1E293B;
+  --border-hover: #475569;
+  --popover: #111827;
+  --popover-foreground: #F1F5F9;
 
   --text-primary: #F1F5F9;
   --text-secondary: #94A3B8;
@@ -234,6 +253,16 @@ body.lite-mode .card:hover {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+}
+
+/* Card headers are a grid so an optional CardAction can sit beside the
+   title, but the implicit `auto` track refuses to shrink below its content
+   — nowrap titles/descriptions then push trailing controls (Switches,
+   buttons) past the viewport on phones. minmax(0,1fr) keeps the same
+   two-region layout while letting the content region actually shrink.
+   (No shipped view uses CardAction, so this has no other effect.) */
+[data-slot='card-header'] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* ── Scrollbar ── */
@@ -406,6 +435,17 @@ body.lite-mode .card:hover {
 @keyframes spin-slow {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ── App viewport height ──
+   Mobile browsers collapse the URL bar while scrolling, so 100vh is taller
+   than the visible viewport and the footer lands below the fold. dvh tracks
+   the real viewport; 100vh stays as the fallback for older browsers. */
+.app-viewport {
+  height: 100vh;
+}
+@supports (height: 100dvh) {
+  .app-viewport { height: 100dvh; }
 }
 
 /* ── Desktop Sidebar / Mobile Menu Visibility ── */
