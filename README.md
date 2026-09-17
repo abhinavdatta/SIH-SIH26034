@@ -18,6 +18,15 @@ compliance officers who need an answer in seconds, not hours.*
 
 </div>
 
+## Credits
+
+- [(22) Kurakula Jahnavi | LinkedIn](https://www.linkedin.com/in/kurakula-jahnavi/)
+- [(22) Venkata Kasinagaraju Kurra | LinkedIn](https://www.linkedin.com/in/venkata-kasinagaraju-kurra-1b703838b/)
+- [(22) Ranganayakulu Kottamasu | LinkedIn](https://www.linkedin.com/in/ranganayakulu-kottamasu-711533362/)
+- [(22) Abhinav Datta | LinkedIn](https://www.linkedin.com/in/abhinav-datta-kaly/)
+- L. Swathi Sree
+- T. Lavanya
+
 ---
 
 ## 📖 Table of Contents
