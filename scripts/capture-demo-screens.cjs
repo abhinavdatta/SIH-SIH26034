@@ -153,6 +153,12 @@ async function typeByPlaceholder(page, placeholder, value) {
   await sleep(6500); // local OCR + console lines accumulate
   await shot(page, 'scene-3-scan-console', true);
 
+  /* Wait for the hybrid pipeline to finish → per-field results view */
+  await page
+    .waitForFunction(() => document.body.textContent.includes('Extracted Fields'), { timeout: 150000 })
+    .catch(() => { throw new Error('Scan never produced results (Extracted Fields missing)'); });
+  await shot(page, 'scene-3-scan-results', true);
+
   /* ── Scene 5: History + Product Audit ── */
   console.log('Scene 5: history + audit');
   await navTo(page, 'Scan History', 'Scan History');
@@ -176,6 +182,62 @@ async function typeByPlaceholder(page, placeholder, value) {
   /* ── Scene 6: AI Providers (stack shot) + console egg for the close ── */
   await navTo(page, 'AI Providers', 'AI Providers Configuration');
   await shot(page, 'scene-6-ai-providers');
+
+  /* ── Extra: forgot-password questions step (Scene 2) ──
+     Requires the probe account to have security answers saved, so:
+     save answers → sign out → walk the forgot flow → screenshot. */
+  console.log('Extra: forgot-password flow');
+  const stage = (s) => console.log('  · ' + s);
+  stage('opening Settings');
+  await navTo(page, 'Settings', 'Account Security');
+  stage('expanding questions form (auto-open for fresh accounts)');
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')].find((x) => /^(Set up|Update|Show)$/.test(x.textContent?.trim() || ''));
+    b?.click();
+  });
+  await sleep(500);
+  stage('typing answers');
+  const questions = await page.evaluate(() =>
+    [...document.querySelectorAll('input')]
+      .map((i) => i.placeholder)
+      .filter((p) => p && p.endsWith('?'))
+  );
+  if (questions.length < 3) throw new Error('Security question inputs not found');
+  for (const q of questions) {
+    await page.type(`input[placeholder="${q}"]`, 'probe answer ' + q.length, { delay: 5 });
+  }
+  stage('saving answers');
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')].find((x) => x.textContent?.includes('Save Answers'));
+    if (!b) throw new Error('Save Answers button missing');
+    b.click();
+  });
+  await page
+    .waitForFunction(() => document.body.textContent.includes('Configured'), { timeout: 30000 })
+    .catch(() => { throw new Error('answers never reached Configured state (save failed?)'); });
+
+  stage('signing out');
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === 'Sign out');
+    if (!b) throw new Error('Sign out button missing');
+    b.click();
+  });
+  await page
+    .waitForFunction(() => !!document.querySelector('input[placeholder="Work email"]'), { timeout: 30000 })
+    .catch(() => { throw new Error('sign-out never returned to login panel'); });
+
+  stage('opening forgot-password');
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button, a')].find((x) => x.textContent?.includes('Forgot password?'));
+    if (!b) throw new Error('Forgot password link missing');
+    b.click();
+  });
+  await page.type('input[placeholder="Your account email"]', EMAIL, { delay: 5 });
+  await page.evaluate(() => document.querySelector('form button[type="submit"]').click());
+  await page
+    .waitForFunction(() => !!document.querySelector('input[placeholder*="first school"]'), { timeout: 30000 })
+    .catch(() => { throw new Error('security questions never appeared after email submit'); });
+  await shot(page, 'scene-2-forgot-questions');
 
   await browser.close();
   console.log(`\nDone → ${OUT}/ (${fs.readdirSync(OUT).filter((f) => f.endsWith('.png')).length} screenshots)`);
