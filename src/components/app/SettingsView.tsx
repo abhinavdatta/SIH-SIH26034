@@ -233,19 +233,31 @@ export default function SettingsView() {
     }
   }
 
-  /* Handle contact form submission */
-  async function handleContactSubmit(e: React.FormEvent) {
+  /* Handle contact form submission — opens a pre-filled GitHub issue.
+     Nothing is stored or transmitted by the app itself: the visitor's
+     own browser opens GitHub, and only pressing "Submit new issue"
+     there actually sends it. Honest by construction. */
+  function handleContactSubmit(e: React.FormEvent) {
     e.preventDefault();
     const errors = validateContact(contactForm);
     setFormErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
-    setFormSubmitting(true);
-    /* Simulated delay for UX; nothing is transmitted by the app */
-    await new Promise(r => setTimeout(r, 800));
-    setFormSubmitting(false);
+    const title = `[LMCC Feedback] ${contactForm.subject}`.slice(0, 120);
+    const body = [
+      contactForm.message,
+      '',
+      '---',
+      `From: ${contactForm.name} (${contactForm.email})`,
+      `Page: ${location.href}`,
+      `Sent: ${new Date().toLocaleString()}`,
+    ].join('\n');
+
+    const url = `https://github.com/abhinavdatta/SIH-SIH26034/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+
     setFormSubmitted(true);
-    toast.success('Message sent! We will get back to you soon.');
+    toast.success('Opening GitHub Issues — press Submit there to send.');
   }
 
   function handleContactChange(field: keyof ContactForm, value: string) {
@@ -507,14 +519,19 @@ export default function SettingsView() {
           <MessageSquare className="h-4 w-4" style={{ color: 'var(--primary)' }} />
           <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Contact Us</h3>
         </div>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+          Submitting opens your message as a pre-filled GitHub issue in a new tab — nothing is stored on this site.
+        </p>
 
         {formSubmitted ? (
           <div className="text-center py-8">
             <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center" style={{ background: 'var(--success-light)' }}>
               <CheckCircle2 className="h-6 w-6" style={{ color: 'var(--success)' }} />
             </div>
-            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Message Sent!</p>
-            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>We will get back to you soon.</p>
+            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Opening GitHub Issues…</p>
+            <p className="text-xs mt-1 max-w-xs mx-auto" style={{ color: 'var(--text-secondary)' }}>
+              Your message opens as a pre-filled issue in a new tab — press <strong>Submit new issue</strong> on GitHub to send it. Issues are public.
+            </p>
             <button
               onClick={() => { setFormSubmitted(false); setContactForm({ name: '', email: '', subject: '', message: '' }); }}
               className="btn-ghost mt-4"
