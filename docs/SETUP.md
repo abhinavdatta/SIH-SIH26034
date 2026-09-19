@@ -26,12 +26,12 @@ cd lmcc-legal-metrology-compliance-checker
 
 ### 2. Install Dependencies
 
-Using **Bun** (recommended):
+Using **npm** (project standard):
 ```bash
-bun install
+npm install
 ```
 
-Using **npm**:
+Using **Bun** (also works):
 ```bash
 npm install
 ```
@@ -47,10 +47,11 @@ Create a `.env` file in the root directory (mirror the same values in
 Vercel → Settings → Environment Variables for deployments):
 
 ```env
-# ── RECOMMENDED: Supabase Postgres (accounts/sessions/scans) ──
-# 1. Run BOTH migrations once (SQL Editor): supabase/migrations/0001_lmcc_auth.sql
-#    (accounts/sessions/scans/limits) AND 0002_account_security.sql (2FA +
-#    security questions + reset tickets)
+# ── RECOMMENDED: Supabase Postgres (accounts/sessions/scans/settings) ──
+# 1. Run ALL THREE migrations once (SQL Editor, any order — they're
+#    idempotent): supabase/migrations/0001_lmcc_auth.sql (accounts/sessions/
+#    scans/limits), 0002_account_security.sql (2FA + security questions +
+#    reset tickets), 0003_default_ai_provider.sql (built-in AI key store)
 # 2. Project Settings → API Keys → Project URL + service_role secret
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
@@ -60,20 +61,26 @@ SUPABASE_SERVICE_ROLE_KEY=
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 AUTH_PEPPER=
 
+# Built-in default AI provider (optional): lets AI/hybrid OCR work with
+# zero personal key for meta/llama-3.2-11b-vision-instruct on NVIDIA.
+# On first use the server encrypts this into Supabase lmcc_settings.
+DEFAULT_AI_PROVIDER_KEY=
+
 # Officer invite codes (comma-separated) — unset = officer sign-up disabled
 OFFICER_INVITE_CODES=
 ```
 
-Fallback chain when Supabase is absent: Upstash Redis / Vercel KV →
-local `.data/auth-kv.json` (self-hosted only) → in-memory. See
-`.env.example` for every option.
+Fallback when Supabase is absent (local dev): a local `.data/` file store —
+accounts still survive restarts on your machine, they just don't sync across
+devices. See `.env.example` for every option.
 
-Note: AI provider API keys are configured via the UI after installation, not in `.env`.
+Note: personal AI provider API keys are configured via the UI after
+installation, not in `.env` — only the built-in shared key uses an env var.
 
 ### 4. Start Development Server
 
 ```bash
-bun run dev
+npm run dev
 ```
 
 The application will be available at: `http://localhost:3000`
@@ -132,8 +139,8 @@ In the **Scan Product** view (Upload Mode) **Hybrid** is the default:
 ## Build for Production
 
 ```bash
-bun run build
-bun run start
+npm run build
+npm start
 ```
 
 ## Accounts, Roles & Sign In
@@ -153,8 +160,8 @@ choosing a role, full name, employee ID, work email and password:
   handler, not the UI). Scan data is strictly per-account for every role.
 
 The same login works from **any device**: accounts, sessions and scans live
-server-side (Upstash Redis when configured; otherwise a durable local store at
-`.data/auth-kv.json` — restarts keep logins, but accounts are per-server).
+server-side (Supabase Postgres when configured; otherwise a durable local file
+store at `.data/` — restarts keep logins, but accounts are per-machine).
 On sign-in the server's scan
 snapshot is merged into the browser; every data change pushes back up.
 Signing out on a shared computer clears the local scan cache — the account
@@ -178,29 +185,34 @@ Signing out on a shared computer clears the local scan cache — the account
 
 ## Finding Free LLM APIs & Keys
 
-## Deployment Target: Vercel Hobby Plan
+## Deployment Target: Vercel (Hobby plan)
 
-This project deploys on the **Vercel Hobby plan**, which hard-caps serverless
-function execution at **10 seconds** — `maxDuration` cannot be raised above 10
-on Hobby regardless of what the code requests.
+The app deploys on **Vercel's Hobby plan** using **Fluid compute** (now the
+default), which allows up to **300 seconds** per function — vision scans need
+it (NVIDIA vision models measured at 30–120s per label).
 
-Consequences baked into the code:
+Current function configuration:
 
-- Both API routes (`/api/validate-api-key`, `/api/vision-fallback`) declare
-  `export const maxDuration = 10`.
-- **API key validation** is deliberately cheap: `max_tokens: 1` with an 8s
-  internal timeout, so the route finishes well inside the cap. The historic
-  `Server error: 502` on validation was Vercel's gateway killing the function
-  before its own 20s timeout fired; the shorter internal timeout fixes that.
-- **Cloud vision OCR routinely exceeds 10s** (NVIDIA vision models measured at
-  30–120s per label). On Hobby this will 502 for slow models no matter what the
-  code does. Mitigations:
-  - Prefer fast vision models (e.g. Llama 3.2 11B Vision) over 90B models.
-  - Use **Local** OCR mode (fully offline, no function limits — Tesseract runs
-    in your browser) when working with slow models.
-  - If you upgrade to Vercel **Pro**, raise `maxDuration` to 60 in both route
-    files and the internal timeouts (currently 8s validate / unbounded vision)
-    can be raised to match.
+- `/api/vision-fallback` declares `maxDuration = 300`; its main AI call times
+  out internally at 200s so the rare prose-conversion follow-up (90s) still
+  fits under the cap.
+- `/api/validate-api-key` declares `maxDuration = 60` (its two stages sum well
+  under that).
+- Historic note: the original build assumed the old 10s Hobby cap and set
+  `maxDuration = 10`, which caused `FUNCTION_INVOCATION_TIMEOUT` on every
+  cloud scan. If you ever see that error again, check that `maxDuration`
+  wasn't reverted.
+
+**Deployment checklist** (in order):
+
+1. Run all three Supabase migrations (SQL Editor) — auth reports
+   `schemaReady:false` until they're in, and self-heals ~15s after.
+2. Set env vars in Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `AUTH_PEPPER`, `DEFAULT_AI_PROVIDER_KEY` (+ `OFFICER_INVITE_CODES` if
+   wanted) — then **Redeploy** (Vercel injects env vars only into new
+   deployments).
+3. Verify: `GET /api/auth` → `"schemaReady":true, "backend":"supabase"`;
+   `GET /api/vision-fallback` → the built-in model name.
 
 ## Finding Free LLM APIs & Keys
 
@@ -226,7 +238,7 @@ lsof -i :3000
 kill -9 <PID>
 
 # Or use a different port
-PORT=3001 bun run dev
+npm run dev -- --port 3001
 ```
 
 ### Dependencies Issues
@@ -235,8 +247,8 @@ If you encounter dependency issues:
 
 ```bash
 # Clear cache and reinstall
-rm -rf node_modules bun.lock
-bun install
+rm -rf node_modules package-lock.json
+npm install
 ```
 
 ### Build Errors

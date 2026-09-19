@@ -7,12 +7,13 @@ session-by-session write-ups are in [`archive/`](./archive).
 
 | Doc | What it covers |
 |---|---|
-| [SETUP.md](./SETUP.md) | **Start here** — install, env vars (Supabase/Upstash/AUTH_PEPPER/invite codes), accounts & roles, security model, deployment target, troubleshooting |
+| [SETUP.md](./SETUP.md) | **Start here** — install, env vars (Supabase/AUTH_PEPPER/DEFAULT_AI_PROVIDER_KEY/invite codes), accounts & roles, security model, Vercel deployment checklist, troubleshooting |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design deep-dive: scan pipeline, rules engine, storage layers |
 | [OCR_TRAINING.md](./OCR_TRAINING.md) | Fine-tuning the Tesseract model on your own labels |
-| [AI_PROVIDERS.md](./AI_PROVIDERS.md) | Free AI provider presets & custom providers |
+| [AI_PROVIDERS.md](./AI_PROVIDERS.md) | Free AI provider presets, built-in default model & custom providers |
 | [OPENROUTER_GUARDRAILS.md](./OPENROUTER_GUARDRAILS.md) | SSRF protections & outbound-call safety |
 | [FEATURES.md](./FEATURES.md) | Complete feature list |
+| [DEMO-VIDEO.md](./DEMO-VIDEO.md) | Demo video script, paste-ready voiceover blocks, screenshot index |
 | [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) | Extending the rules engine & contributing |
 
 ## Reference

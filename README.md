@@ -4,7 +4,7 @@
 
 ### AI-powered compliance auditing for Indian packaged-commodity labels
 
-[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tesseract.js](https://img.shields.io/badge/OCR-Tesseract%205-1a73e8)](https://github.com/naptha/tesseract.js)
 [![Smart India Hackathon](https://img.shields.io/badge/SIH-26034-8b5cf6)](https://www.sih.gov.in)
@@ -69,20 +69,24 @@ login works from **any device**.
 
 | | Feature | Details |
 |---|---|---|
-| 📷 | **Three OCR modes** | `Local` (Tesseract in your browser, zero data leaves the device) · `AI` (cloud vision LLM) · `Hybrid` (local first, AI fallback only for high-severity fields) |
+| 📷 | **Three OCR modes** | `Local` (Tesseract in your browser, zero data leaves the device) · `AI` (cloud vision LLM) · `Hybrid` (**default** — local first, AI fallback only for high-severity fields) |
+| ⚡ | **Zero-config AI** | One provisioned vision model (`meta/llama-3.2-11b-vision-instruct` on NVIDIA) works for **every user out of the box** — its key is held server-side, AES-encrypted in Supabase; every other model stays bring-your-own-key |
 | ⚖️ | **Rules engine** | Field-level verdicts (`compliant / needs_review / missing / non_compliant`) with rule references, severity, and human-readable notes |
 | 🔢 | **Character whitelisting** | Second, targeted OCR pass restricted to valid characters for MRP (incl. `₹`), net quantity, and dates — kills "8"→"B" misreads |
 | 🧾 | **Product Declarations Audit** | Manual entry form with a live compliance preview — audit a product without any photo at all |
 | ✏️ | **Edit anything, anywhere** | Review Queue overrides, and full **Edit** from Scan History that re-runs the engine and updates the scan in place |
 | 👥 | **Roles** | *Seller* (upload & audit products) and *Compliance Officer / Admin* (everything + Review Queue + Legal Reference) |
-| 🔄 | **Cross-device sync** | Accounts and scans live server-side (Upstash Redis) — sign in anywhere and your history is there |
+| 🔄 | **Cross-device sync** | Accounts and scans live server-side (Supabase Postgres) — sign in anywhere and your history is there |
 | 🔒 | **Privacy-first security** | Raw passwords never leave the browser (client-derived PBKDF2 verifier), PII encrypted at rest (AES-256-GCM), httpOnly session cookies |
+| 🔐 | **Full account security** | Authenticator-app 2FA (QR, server-generated) with 10 single-use backup codes · forgot-password via security questions (single-use tickets, all other devices logged out) · change-password from Settings |
 | 📊 | **Dashboard** | Live compliance stats, recent scans, and violation breakdowns |
 | 📄 | **Stamped exports** | PDF (formatted report w/ tables & page furniture) and CSV — every export records *who* produced it (name · employee ID · email) |
+| 📬 | **Honest contact form** | Composes a pre-filled GitHub issue (with browser/device diagnostics attached) in a new tab — nothing is stored on the site, nothing sends without an explicit GitHub action |
 | 🎯 | **Self-improving OCR** | Reviewer corrections are captured (opt-in) as labeled training pairs and export straight into the training pipeline |
 | 🪶 | **Lite Mode** | Auto-detects low-RAM devices (≤2GB / ≤2 cores) and trims canvas sizes, animations, and the custom cursor |
-| ♿ | **Accessible** | Skip link, visible focus rings, `prefers-reduced-motion` support, full keyboard navigation (`Alt+1…7`, `Alt+K` cheat sheet) |
+| ♿ | **Accessible** | Skip link, visible focus rings, `prefers-reduced-motion` support, full keyboard navigation (`Alt+1…7`, `Alt+K` cheat sheet), mobile-first responsive layout |
 | 🌗 | **Dark / light theme** | System-aware with a manual toggle |
+| 🥚 | **Easter eggs** | Konami code → secret Snake arcade · 404 rickroll · clickable logo & credits · DevTools console greeting |
 
 ---
 
@@ -121,9 +125,9 @@ an explanation that lands in the report and the reviewer's queue.
 | Requirement | Version | Notes |
 |---|---|---|
 | **Node.js** | 18+ (20 recommended) | [nodejs.org](https://nodejs.org) |
-| **Bun** *(recommended)* | 1.1+ | `npm`/`pnpm`/`yarn` also work |
-| **Upstash Redis** *(optional)* | free tier | only for cross-device accounts/sync |
 | **Git** | any | to clone |
+
+`npm` is the project's package manager (lockfile committed); `bun`/`pnpm` also work.
 
 ### Install & run
 
@@ -133,51 +137,61 @@ git clone https://github.com/abhinavdatta/SIH-SIH26034.git
 cd SIH-SIH26034
 
 # 2 · Install dependencies
-bun install        # or: npm install
+npm install
 
-# 3 · Environment (optional — the app runs without it)
-cp .env.example .env   # if present, or create .env with the vars below
-
-# 4 · Start
-bun run dev        # or: npm run dev
+# 3 · Start (no env vars needed — the app runs on a local file backend)
+npm run dev
 ```
 
 Open **http://localhost:3000** → create an account (pick a role) → scan a label
-from `training/images/` or audit a product manually.
+from `training/images/` or audit a product manually. AI/hybrid OCR works
+immediately via the built-in default model.
 
 <details>
-<summary><b>Environment variables</b> (click to expand)</summary>
+<summary><b>Environment variables</b> (click to expand — all optional locally)</summary>
 
 ```env
 # Application URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
-# ── Accounts & cross-device sync (optional but recommended) ──
-# Free tier: upstash.com → Redis → REST credentials.
-# Without these, accounts still SURVIVE restarts via a local .data/ store
-# (per-server); set Upstash to share logins across different machines.
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
+# ── Durable backend (production) ──
+# Supabase Postgres via the Data API: accounts, sessions, scans, settings.
+# Free tier at supabase.com → project Settings → API.
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=   # service_role secret — server-side ONLY, never expose
 
 # Server pepper: encrypts user PII + HMACs email lookups. Generate:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 AUTH_PEPPER=
+
+# ── Built-in default AI provider (optional) ──
+# Lets AI/hybrid OCR work with zero personal key for ONE provisioned model
+# (meta/llama-3.2-11b-vision-instruct on NVIDIA). On first use the server
+# encrypts this key into Supabase lmcc_settings and reads only the envelope
+# afterwards. Without it (and without the Supabase row), AI/hybrid require
+# each user to bring their own key.
+DEFAULT_AI_PROVIDER_KEY=
 ```
 
-> AI provider keys are **not** env vars — they're configured per-user in the
-> app's **AI Providers** screen and stored locally.
+> Personal AI-provider keys are **not** env vars — they're configured per-user
+> in the app's **AI Providers** screen and never leave that browser.
+
+**Supabase migrations** (run once in the SQL Editor, in order):
+`supabase/migrations/0001_lmcc_auth.sql` → `0002_account_security.sql` →
+`0003_default_ai_provider.sql`. All are idempotent.
 </details>
 
 <details>
 <summary><b>Production build</b></summary>
 
 ```bash
-bun run build
-bun run start
+npm run build
+npm start
 ```
 
-The project targets **Vercel's Hobby plan** (10s serverless cap) — see
-[docs/SETUP.md](docs/SETUP.md) for the timeout implications and mitigations.
+Deploy target: **Vercel** (Hobby plan works — functions use Fluid compute's
+300s allowance for vision scans). See [docs/SETUP.md](docs/SETUP.md) for the
+deployment checklist.
 </details>
 
 ---
@@ -205,25 +219,45 @@ the news):
 - 🧊 **PII encrypted at rest.** Name/email/employee ID are AES-256-GCM encrypted
   with a key derived from `AUTH_PEPPER`; email lookups use an HMAC index — a
   database dump without the env secret reveals no user PII.
+- 🔐 **Authenticator 2FA (TOTP)** — QR generated server-side (no third-party
+  image service ever sees the secret), plus **10 single-use backup codes**
+  (stored as SHA-256 hashes) so a lost phone isn't a lockout.
+- 🛟 **Forgot password** via three security questions — single-use 15-minute
+  tickets stored as hashes, max 5 attempts, identical responses whether or not
+  an account exists, and **every other device gets logged out** after a reset.
 - 🍪 **httpOnly session cookies** (SameSite=Lax) — no tokens in localStorage for
   XSS to steal.
 - 🐢 **Timing-safe comparison** + deliberately vague sign-in errors (no user
-  enumeration) + per-IP/email rate limiting.
+  enumeration) + durable per-IP/email rate limiting (Supabase RPC).
+- 🗄️ **Durable backend:** Supabase Postgres (service-role, RLS deny-all on every
+  table) with a local file fallback for offline development.
 
 ---
 
-## 🤖 Connecting Free AI Providers
+## 🤖 AI Providers
+
+**You don't need a key to start.** One vision model is provisioned for everyone:
+
+> `meta/llama-3.2-11b-vision-instruct` (NVIDIA NIM) — its key lives server-side
+> (AES-256-GCM encrypted in Supabase `lmcc_settings`), never reaches browsers,
+> and shared use is rate-limited (10 scans/min per IP). AI and Hybrid modes work
+> immediately; the Scan Product and AI Providers screens show the
+> "Built-in default active" banner.
+
+**Bring your own key** for everything else:
 
 1. Open **AI Providers** in the sidebar
 2. Pick a preset (OpenRouter & NVIDIA NIM included) or **Add Custom Provider**
 3. Paste your key → **Test connection** → Save → enable the toggle
+4. Your key is stored only in *your* browser and sent only to *our* SSRF-guarded
+   API route, which relays to the provider — the key never touches anyone else's server
 
 Each field has a *"Where do I find these?"* helper with concrete examples, and the
 app links to [awesome-freellm-apis](https://github.com/open-free-llm-api/awesome-freellm-apis)
 — a curated catalogue of free LLM APIs and their key signup pages.
 
-No AI provider? Everything still works in **Local mode** — Tesseract runs entirely
-in your browser.
+No internet at all? Everything still works in **Local mode** — Tesseract runs
+entirely in your browser.
 
 ---
 
@@ -285,6 +319,7 @@ Settings → **Performance** → *Auto / On / Off*.
 | `Alt + K` | Keyboard shortcuts cheat sheet |
 | `Tab` | Skip link → *"Skip to main content"* |
 | `↑ ↓` arrows | Navigate the sidebar |
+| `↑↑↓↓←→←→BA` | 🥚 You found the arcade |
 
 ---
 
@@ -295,31 +330,38 @@ SIH-SIH26034/
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── auth/                 # register / login / logout / session
+│   │   │   ├── auth/                 # register / login / 2FA / reset / sessions
 │   │   │   ├── scans/                # cross-device scan sync
 │   │   │   ├── validate-api-key/     # provider key validation (SSRF-guarded)
-│   │   │   └── vision-fallback/      # hybrid-mode cloud OCR (SSRF-guarded)
+│   │   │   └── vision-fallback/      # cloud OCR + built-in default provider
 │   │   ├── globals.css               # design tokens + a11y + lite-mode CSS
-│   │   ├── layout.tsx                # AuthProvider + theme
-│   │   ├── not-found.tsx             # branded 404
+│   │   ├── layout.tsx                # AuthProvider + theme + PWA manifest
+│   │   ├── not-found.tsx             # branded 404 (with 🥚)
 │   │   └── page.tsx                  # auth gate + view routing
 │   ├── components/
 │   │   ├── app/                      # Dashboard, UploadScan, ReviewQueue,
 │   │   │                             # ProductHistory, ProductAudit, Report,
-│   │   │                             # AIProviders, Settings, AuthPanel, …
+│   │   │                             # AIProviders, Settings, AuthPanel,
+│   │   │                             # AccountSecurityCard, easter-eggs, …
 │   │   └── ui/                       # shadcn/radix primitives
 │   └── lib/
 │       ├── auth.tsx                  # session context (client)
 │       ├── auth-crypto.ts            # PBKDF2 client verifier
-│       ├── server/auth-store.ts      # scrypt + AES-GCM + Redis store
+│       ├── server/auth-store.ts      # scrypt + AES-GCM credential store
+│       ├── server/supabase-store.ts  # Postgres Data API access (service role)
+│       ├── server/default-provider.ts# built-in AI model (encrypted key)
+│       ├── server/totp.ts            # RFC 6238 2FA
 │       ├── compliance-rules.ts       # ⚖️ the rules engine
 │       ├── ocr.ts                    # Tesseract pipeline + whitelisting
 │       ├── scan-sync.ts              # device ↔ server merge
 │       ├── training-samples.ts       # review corrections → tesstrain ZIP
 │       ├── lite-mode.ts              # low-memory detection
 │       └── local-data.ts             # scan persistence (localStorage)
+├── supabase/migrations/              # 0001 auth · 0002 security · 0003 settings
 ├── training/                         # OCR fine-tuning pipeline (see above)
-├── docs/                             # SETUP, ARCHITECTURE, OCR_TRAINING, …
+├── docs/                             # SETUP, ARCHITECTURE, DEMO-VIDEO, …
+├── images/                           # numbered demo screenshots (01–12)
+├── scripts/                          # E2E suites + screenshot capture
 └── public/tessdata/                  # WASM models incl. your fine-tuned one
 ```
 
@@ -329,12 +371,13 @@ SIH-SIH26034/
 
 | Doc | Contents |
 |---|---|
-| [docs/SETUP.md](docs/SETUP.md) | Install, env vars, deployment target, troubleshooting |
+| [docs/SETUP.md](docs/SETUP.md) | Install, env vars, Supabase + Vercel deployment checklist, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design deep-dive |
 | [docs/OCR_TRAINING.md](docs/OCR_TRAINING.md) · [training/README.md](training/README.md) | Model fine-tuning pipeline |
-| [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md) | Provider presets & custom providers |
+| [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md) | Provider presets, built-in default & custom providers |
 | [docs/OPENROUTER_GUARDRAILS.md](docs/OPENROUTER_GUARDRAILS.md) | SSRF protections & outbound-call safety |
 | [docs/FEATURES.md](docs/FEATURES.md) | Complete feature list |
+| [docs/DEMO-VIDEO.md](docs/DEMO-VIDEO.md) | Demo script + paste-ready voiceover blocks (with `images/` previews) |
 | [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | Contributing / extending the engine |
 
 ---

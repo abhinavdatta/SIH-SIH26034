@@ -29,10 +29,11 @@
 - **Multi-Format Support**: JPG, PNG, WEBP, GIF, BMP, HEIC, PDF
 - **Drag & Drop**: Intuitive file upload interface
 - **Image Preview**: Preview before processing
-- **Progress Indicators**: Real-time OCR progress updates
-- **Dual Processing Modes**: Local (offline) or Cloud (AI-enhanced)
+- **Progress Indicators**: Real-time OCR progress updates + a live activity console showing each pipeline step
+- **Three Processing Modes**: Local (offline), AI (cloud), **Hybrid (default)** — local first, AI fallback for high-severity fields
+- **Zero-Config AI**: one built-in server-held vision model (meta/llama-3.2-11b-vision-instruct) works for every user; BYOK for all others
 - **Automatic Fallback**: Cloud mode falls back to local on failure
-- **Confidence Scoring**: Per-field confidence scores
+- **Confidence Scoring**: Per-field confidence scores with AI reasoning for the audit trail
 
 ### 🔍 Review Queue
 - **Tiered Review System**: Prioritizes low-confidence extractions
@@ -240,6 +241,14 @@
 
 ## Security Features
 
+### Account Security
+- **Two-Factor Authentication**: authenticator-app TOTP (RFC 6238) with a server-generated QR (no third-party image service sees the secret)
+- **Backup Codes**: 10 single-use recovery codes issued at 2FA setup, stored as SHA-256 hashes
+- **Forgot Password**: three security questions → single-use 15-minute ticket (hash-stored, max 5 attempts, no user enumeration) → instant sign-in
+- **Post-Reset Protection**: password change/reset invalidates every other device's session
+- **Change Password**: signed-in flow from Settings → Account, keeps the current device signed in
+- **Role Integrity**: officer accounts only via invite codes, enforced server-side
+
 ### API Key Security
 - **Server-Side Proxy**: API keys processed server-side only
 - **Local Storage**: Keys stored in browser localStorage
@@ -249,10 +258,11 @@
 
 ### Data Privacy
 - **Client-Side Processing**: Images processed locally (when possible)
-- **No Data Retention**: No server-side data storage
+- **No Secret Leakage**: raw passwords never leave the browser (client-derived PBKDF2 verifier); PII AES-256-GCM encrypted at rest
 - **Cloud Transparency**: Clear disclosure when cloud is used
 - **Local-First Default**: Prefers local processing
 - **User Control**: User chooses when to use cloud
+- **Honest Contact Form**: submits compose a pre-filled GitHub issue (nothing stored site-side), with browser/device diagnostics attached for bug triage
 
 ### AI Security
 - **Output Guardrails**: Structured, validated AI outputs
@@ -285,10 +295,10 @@
   - Unauthorized access
 
 ### Timeout Handling
-- **30-Second Timeout**: Increased from 10 seconds
-- **AbortController**: Proper fetch timeout handling
-- **User Feedback**: Clear timeout messages
-- **Automatic Retry**: User can retry after timeout
+- **300s Serverless Budget**: vision scans get Fluid compute's full allowance (main AI call internally capped at 200s + a 90s prose-conversion pass)
+- **60s Key Validation**: two-stage validation well inside its cap
+- **Automatic Retry**: transient provider failures (502/503/504) retried up to 3× with backoff
+- **User Feedback**: clear timeout messages with the offending provider named
 
 ---
 
