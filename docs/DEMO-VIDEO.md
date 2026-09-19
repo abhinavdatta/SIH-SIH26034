@@ -15,6 +15,11 @@ Target length: **3:30–4:15** · 1920×1080 · MP4 (H.264)
 symbols. Periods mark pauses. "OCR", "API", "MRP" read fine as letters.
 Do **not** paste the ACTIONS list into the voiceover field.
 
+**Rendered previews:** each scene has a captured screenshot in `images/`
+(`scene-*.png`, 1920×1080 dark mode), produced by
+`node scripts/capture-demo-screens.cjs` — useful as framing references
+while recording.
+
 ---
 
 ## Scene 1 — Hook + Problem (0:00–0:25)
