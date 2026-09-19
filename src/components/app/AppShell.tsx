@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LayoutDashboard, Upload, ClipboardCheck, History,
   Settings, Shield, Menu, BookOpen, Sun, Moon, Bot, Keyboard, X, FileSearch,
@@ -17,6 +17,7 @@ import type { ViewName } from '@/lib/types';
 import { matchShortcut, VIEW_SHORTCUTS } from '@/lib/keyboard-shortcuts';
 import { isLiteMode } from '@/lib/lite-mode';
 import { useAuth, REPO_URL, WATERMARK_LINE, ROLE_LABELS } from '@/lib/auth';
+import { useKonami, fireConfetti, consoleEasterEgg, SnakeGame } from './easter-eggs';
 import type { UserRole } from '@/lib/auth';
 
 /* ── Signed-in user chip — identity that gets stamped into exports ── */
@@ -170,6 +171,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { user } = useAuth();
   const allowed = ROLE_VIEWS[user?.role ?? 'seller'];
 
+  /* Logo easter egg: 7 quick taps → confetti + a jump to the scanner. */
+  const [logoTaps, setLogoTaps] = useState(0);
+  const logoTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   function handleNav(view: ViewName) {
     setCurrentView(view);
     onNavigate?.();
@@ -180,12 +185,26 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       {/* Logo / Brand */}
       <div className="px-5 pt-6 pb-5">
         <div className="flex items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-[var(--radius-md)] flex items-center justify-center"
+          <button
+            type="button"
+            aria-label="LMCC home"
+            className="w-9 h-9 rounded-[var(--radius-md)] flex items-center justify-center cursor-default"
             style={{ background: 'var(--primary)' }}
+            onClick={() => {
+              if (logoTapTimer.current) clearTimeout(logoTapTimer.current);
+              const next = logoTaps + 1;
+              if (next >= 7) {
+                setLogoTaps(0);
+                fireConfetti();
+                setCurrentView('upload-scan');
+              } else {
+                setLogoTaps(next);
+                logoTapTimer.current = setTimeout(() => setLogoTaps(0), 2500);
+              }
+            }}
           >
             <Shield className="w-[18px] h-[18px] text-white" />
-          </div>
+          </button>
           <div>
             <h1 className="text-sm font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
               LMCC
@@ -290,6 +309,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { currentView, sidebarOpen, setSidebarOpen, toggleSidebar, setCurrentView } = useAppStore();
   const { user } = useAuth();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  /* ── Easter eggs (lazy, self-contained, never blocks real work) ── */
+  const [snakeOpen, setSnakeOpen] = useState(false);
+
+  useKonami(useCallback(() => {
+    fireConfetti();
+    setSnakeOpen(true);
+  }, []));
+
+  useEffect(() => {
+    // Console greeting once per session — a nod to the curious.
+    if (!sessionStorage.getItem('lmcc-egg-console')) {
+      sessionStorage.setItem('lmcc-egg-console', '1');
+      consoleEasterEgg();
+    }
+  }, []);
 
   /* Role guard: if the current view is not permitted (or unknown), fall
      back to the dashboard. Covers deep links + stale stores after a
@@ -426,6 +461,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <ShortcutsCheatSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <SnakeGame open={snakeOpen} onClose={() => setSnakeOpen(false)} />
     </div>
   );
 }

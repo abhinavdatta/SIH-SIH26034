@@ -4,9 +4,10 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Settings as SettingsIcon, Sun, Moon, Trash2, Database, Info, Shield, Send, Download, CheckCircle2, Mail, MessageSquare, User, Loader2, GraduationCap, Scale, FileText, Zap } from 'lucide-react';
 import { toast } from 'sonner';
+import { fireConfetti } from './easter-eggs';
 import { useTheme } from 'next-themes';
 import { notifyDataChange } from '@/lib/hooks';
 import { seedDemoData } from '@/lib/local-data';
@@ -22,6 +23,41 @@ import {
   downloadTrainingPairsZip,
   clearTrainingPairs,
 } from '@/lib/training-samples';
+
+/* ── AboutCreditsEgg — tap "SIH26034 — LMCC" five times quickly for the
+   hidden credits. Same title, same layout; only a click handler added. ── */
+
+function AboutCreditsEgg() {
+  const [taps, setTaps] = useState(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function onTap() {
+    if (timer.current) clearTimeout(timer.current);
+    const next = taps + 1;
+    if (next >= 5) {
+      setTaps(0);
+      fireConfetti();
+      toast.success('🥚 Built with questionable sleep schedule by Abhinav Datta', {
+        description: 'Next.js · Supabase · Tesseract.js · one slightly over-caffeinated laptop — github.com/abhinavdatta',
+      });
+    } else {
+      setTaps(next);
+      timer.current = setTimeout(() => setTaps(0), 2_500);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Shield className="h-5 w-5" style={{ color: 'var(--primary)' }} />
+      <div>
+        <button type="button" onClick={onTap} className="text-sm font-bold cursor-default" style={{ color: 'var(--text-primary)' }}>
+          SIH26034 — LMCC
+        </button>
+        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Legal Metrology Compliance Checker</p>
+      </div>
+    </div>
+  );
+}
 
 /* ── PWA Install Hook ── */
 
@@ -578,13 +614,7 @@ export default function SettingsView() {
           <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>About LMCC</h3>
         </div>
         <div className="rounded-[var(--radius-md)] p-4 border" style={{ background: 'var(--bg-input)', borderColor: 'var(--border-light)' }}>
-          <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5" style={{ color: 'var(--primary)' }} />
-            <div>
-              <p className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>SIH26034 — LMCC</p>
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Legal Metrology Compliance Checker</p>
-            </div>
-          </div>
+          <AboutCreditsEgg />
           <p className="text-xs leading-relaxed mt-3" style={{ color: 'var(--text-secondary)' }}>
             An AI-powered tool for verifying packaged commodity label compliance under the
             Legal Metrology (Packaged Commodities) Rules, 2011, Government of India.
