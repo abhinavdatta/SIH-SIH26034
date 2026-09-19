@@ -123,6 +123,26 @@ interface FormErrors {
   message?: string;
 }
 
+/* ── Device diagnostics for issue triage ──
+   Everything here is ordinary browser telemetry any site can see
+   (screen size, UA string, language, timezone). No fingerprinting
+   tricks, no storage reads, no network calls. */
+
+function buildDeviceDiagnostics(): string {
+  const nav = navigator as Navigator & { deviceMemory?: number; connection?: { effectiveType?: string } };
+  const lines = [
+    `**Environment**`,
+    `- Platform: ${nav.platform || 'unknown'}`,
+    `- Screen: ${screen.width}x${screen.height} @ ${window.devicePixelRatio || 1}x, viewport ${window.innerWidth}x${window.innerHeight}`,
+    `- Language: ${nav.language || 'unknown'}, timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown'}`,
+    `- Browser: ${(nav.userAgent.match(/(Chrome|Chromium|Firefox|Safari|Edg)\/[\d.]+/g) || ['unknown']).join(', ')}`,
+    `- CPU cores: ${nav.hardwareConcurrency ?? 'unknown'}${nav.deviceMemory ? `, RAM ~${nav.deviceMemory} GB` : ''}`,
+    `- Network: ${nav.connection?.effectiveType ?? 'unknown'}${typeof nav.onLine === 'boolean' ? `, online: ${nav.onLine}` : ''}`,
+    `- Theme: ${document.documentElement.classList.contains('dark') ? 'dark' : 'light'}`,
+  ];
+  return lines.join('\n');
+}
+
 function validateContact(data: ContactForm): FormErrors {
   const errors: FormErrors = {};
   if (!data.name.trim()) errors.name = 'Name is required';
@@ -254,6 +274,9 @@ export default function SettingsView() {
       `From: ${contactForm.name} (${contactForm.email})`,
       `Page: ${location.href}`,
       `Sent: ${new Date().toLocaleString()}`,
+      '',
+      '<!-- Auto-attached browser/device diagnostics for bug triage -->',
+      buildDeviceDiagnostics(),
     ].join('\n');
 
     const url = `https://github.com/abhinavdatta/SIH-SIH26034/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
@@ -536,7 +559,7 @@ export default function SettingsView() {
           <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Contact Us</h3>
         </div>
         <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
-          Submitting opens your message as a pre-filled GitHub issue in a new tab — nothing is stored on this site.
+          Submitting opens your message as a pre-filled GitHub issue in a new tab — nothing is stored on this site. Basic browser/device info (screen size, browser, OS) is attached to help reproduce bugs.
         </p>
 
         {formSubmitted ? (
