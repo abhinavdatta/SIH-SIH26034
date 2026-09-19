@@ -653,7 +653,7 @@ export default function UploadScanView() {
                 </p>
                 <div className="rounded-[var(--radius-md)] overflow-hidden border" style={{ borderColor: 'var(--border-default)' }}>
                   <img
-                    src="/example-product-label.webp"
+                    src="/example-product-label.jpg"
                     alt="Example product label with manufacturer details, MRP, and compliance information"
                     className="w-full h-auto"
                   />
