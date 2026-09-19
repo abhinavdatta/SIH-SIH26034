@@ -89,7 +89,7 @@ async function typeByPlaceholder(page, placeholder, value) {
     await typeByPlaceholder(page, 'Employee ID (e.g. EMP-042)', 'EMP-DEMO');
     await typeByPlaceholder(page, 'Work email', EMAIL);
     await typeByPlaceholder(page, 'Password (8+ chars, letter + number)', PASSWORD);
-    await shot(page, 'scene-2-signup-roles');
+    await shot(page, '02-signup-roles');
     // Submit the SIGNUP form (the submit button shares its label with the
     // tab, so target the form's submit button explicitly).
     await page.evaluate(() => {
@@ -117,11 +117,11 @@ async function typeByPlaceholder(page, placeholder, value) {
   /* ── Scene 1: Dashboard ── */
   console.log('Scene 1: dashboard');
   await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 60000 });
-  await shot(page, 'scene-1-dashboard');
+  await shot(page, '01-dashboard');
 
   /* ── Scene 2b: Account Security (2FA + backup codes section) ── */
   await navTo(page, 'Settings', 'Account Security');
-  await shot(page, 'scene-2-account-security');
+  await shot(page, '04-account-security');
 
   /* ── Scene 3: Upload mode + hybrid default + console ── */
   console.log('Scene 3: hybrid scan');
@@ -129,7 +129,7 @@ async function typeByPlaceholder(page, placeholder, value) {
   await clickByText(page, 'button', 'Upload Mode');
   await page.waitForFunction(() => document.body.textContent.includes('Built-in default active'), { timeout: 20000 });
   await sleep(400);
-  await shot(page, 'scene-3-mode-hybrid-builtin', true);
+  await shot(page, '05-mode-hybrid-builtin', true);
 
   /* Upload the real sample label and run the scan */
   const input = await page.$('input[type="file"]');
@@ -149,22 +149,22 @@ async function typeByPlaceholder(page, placeholder, value) {
     btn.click();
   });
   await sleep(1500); // progress steps + console starting
-  await shot(page, 'scene-3-scan-start', true);
+  await shot(page, '06-scan-start', true);
   await sleep(6500); // local OCR + console lines accumulate
-  await shot(page, 'scene-3-scan-console', true);
+  await shot(page, '07-scan-console', true);
 
   /* Wait for the hybrid pipeline to finish → per-field results view */
   await page
     .waitForFunction(() => document.body.textContent.includes('Extracted Fields'), { timeout: 150000 })
     .catch(() => { throw new Error('Scan never produced results (Extracted Fields missing)'); });
-  await shot(page, 'scene-3-scan-results', true);
+  await shot(page, '08-scan-results', true);
 
   /* ── Scene 5: History + Product Audit ── */
   console.log('Scene 5: history + audit');
   await navTo(page, 'Scan History', 'Scan History');
-  await shot(page, 'scene-5-scan-history');
+  await shot(page, '10-scan-history');
   await navTo(page, 'Product Audit', 'Product Audit');
-  await shot(page, 'scene-5-product-audit');
+  await shot(page, '11-product-audit');
 
   /* ── Scene 4: compliance report + PDF-ready view ── */
   console.log('Scene 4: report');
@@ -177,11 +177,11 @@ async function typeByPlaceholder(page, placeholder, value) {
   });
   await page.waitForFunction(() => document.body.textContent.includes('Compliance Report'), { timeout: 20000 });
   await sleep(600);
-  await shot(page, 'scene-4-compliance-report');
+  await shot(page, '09-compliance-report');
 
   /* ── Scene 6: AI Providers (stack shot) + console egg for the close ── */
   await navTo(page, 'AI Providers', 'AI Providers Configuration');
-  await shot(page, 'scene-6-ai-providers');
+  await shot(page, '12-ai-providers');
 
   /* ── Extra: forgot-password questions step (Scene 2) ──
      Requires the probe account to have security answers saved, so:
@@ -237,7 +237,7 @@ async function typeByPlaceholder(page, placeholder, value) {
   await page
     .waitForFunction(() => !!document.querySelector('input[placeholder*="first school"]'), { timeout: 30000 })
     .catch(() => { throw new Error('security questions never appeared after email submit'); });
-  await shot(page, 'scene-2-forgot-questions');
+  await shot(page, '03-forgot-questions');
 
   await browser.close();
   console.log(`\nDone → ${OUT}/ (${fs.readdirSync(OUT).filter((f) => f.endsWith('.png')).length} screenshots)`);

@@ -15,10 +15,25 @@ Target length: **3:30–4:15** · 1920×1080 · MP4 (H.264)
 symbols. Periods mark pauses. "OCR", "API", "MRP" read fine as letters.
 Do **not** paste the ACTIONS list into the voiceover field.
 
-**Rendered previews:** each scene has a captured screenshot in `images/`
-(`scene-*.png`, 1920×1080 dark mode), produced by
-`node scripts/capture-demo-screens.cjs` — useful as framing references
-while recording.
+**Rendered previews:** each beat has a captured screenshot in `images/`
+(`NN-*.png`, numbered in demo-timeline order, 1920×1080 dark mode),
+produced by `node scripts/capture-demo-screens.cjs` — useful as framing
+references while recording.
+
+| # | File | Beat |
+|---|------|------|
+| 01 | `01-dashboard.png` | Scene 1 — hook / dashboard |
+| 02 | `02-signup-roles.png` | Scene 2 — sign-up + role selector |
+| 03 | `03-forgot-questions.png` | Scene 2 — forgot-password questions step |
+| 04 | `04-account-security.png` | Scene 2 — 2FA + backup codes section |
+| 05 | `05-mode-hybrid-builtin.png` | Scene 3 — hybrid preselected + built-in banner |
+| 06 | `06-scan-start.png` | Scene 3 — progress steps begin |
+| 07 | `07-scan-console.png` | Scene 3 — live activity console |
+| 08 | `08-scan-results.png` | Scene 3 — extracted fields with confidence |
+| 09 | `09-compliance-report.png` | Scene 4 — verdict, rule citations, export |
+| 10 | `10-scan-history.png` | Scene 5 — history list |
+| 11 | `11-product-audit.png` | Scene 5 — manual entry / edit form |
+| 12 | `12-ai-providers.png` | Scene 6 — BYOK provider config |
 
 ---
 
