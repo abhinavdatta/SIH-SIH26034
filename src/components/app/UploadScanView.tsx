@@ -92,6 +92,21 @@ export default function UploadScanView() {
       return false;
     }
   });
+  /* Built-in default provider (server-held key, one provisioned model):
+     makes AI/hybrid work with zero personal configuration. Probed once
+     on mount; only the model name is public — the key stays server-side. */
+  const [builtIn, setBuiltIn] = useState<{ model: string; source: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/vision-fallback')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { builtInProvider?: { model: string; source: string } | null } | null) => {
+        if (alive && d?.builtInProvider) setBuiltIn(d.builtInProvider);
+      })
+      .catch(() => { /* offline / local dev without default — AI stays BYOK-only */ });
+    return () => { alive = false; };
+  }, []);
+  const aiReady = aiProviderConfigured || builtIn !== null;
 
   /* Start the compliance scan on the selected product or uploaded file */
   async function startScan() {
@@ -143,6 +158,13 @@ export default function UploadScanView() {
         if (providerNowConfigured !== aiProviderConfigured) {
           setAiProviderConfigured(providerNowConfigured);
         }
+        /* What the OCR call actually uses: the personal provider when set,
+           otherwise the built-in default via a sentinel that makes the
+           server fall back to its server-held key (never sent to client). */
+        const effectiveProvider = activeProvider
+          ? { apiUrl: activeProvider.apiUrl, model: activeProvider.model, apiKey: activeProvider.apiKey, category: activeProvider.category }
+          : { apiUrl: 'built-in', model: builtIn?.model || 'meta/llama-3.2-11b-vision-instruct', apiKey: '', category: 'nvidia' as const };
+        const usingBuiltIn = !activeProvider && builtIn !== null;
 
         try {
           if (ocrMode === 'local') {
@@ -186,20 +208,15 @@ export default function UploadScanView() {
 
           } else if (ocrMode === 'ai') {
             /* AI Only: Use only Cloud OCR (no region detection involved) */
-            if (!activeProvider) {
-              throw new Error('AI provider not configured. Please configure an AI provider in Settings first.');
+            if (!activeProvider && !usingBuiltIn) {
+              throw new Error('AI provider not configured. Add your own key in Settings → AI Providers.');
             }
 
-            console.log('[Scan] Using AI OCR mode');
-            appendLog(`AI mode: sending label to ${activeProvider.model} for vision extraction`);
+            console.log(`[Scan] Using AI OCR mode (${usingBuiltIn ? 'built-in default: ' + effectiveProvider.model : 'personal key'})`);
+            appendLog(`AI mode: sending label to ${effectiveProvider.model}${usingBuiltIn ? ' (built-in default — server-held key)' : ''} for vision extraction`);
 
             const ocrProgressRef = { current: 0 };
-            ocrResult = await performCloudOCR(uploadedFile!, {
-              apiUrl: activeProvider.apiUrl,
-              model: activeProvider.model,
-              apiKey: activeProvider.apiKey,
-              category: activeProvider.category,
-            }, (progress: OCRProgress) => {
+            ocrResult = await performCloudOCR(uploadedFile!, effectiveProvider, (progress: OCRProgress) => {
               if (progress.message && ocrProgressRef.current !== progress.progress) {
                 appendLog(`AI OCR: ${progress.message}`);
                 ocrProgressRef.current = progress.progress;
@@ -220,20 +237,15 @@ export default function UploadScanView() {
 
           } else {
             /* Hybrid: Local spatial extraction first, cloud AI fallback for low-confidence fields */
-            if (!activeProvider) {
-              throw new Error('AI provider not configured for hybrid mode. Please configure an AI provider in Settings first.');
+            if (!activeProvider && !usingBuiltIn) {
+              throw new Error('AI provider not configured for hybrid mode. Add your own key in Settings → AI Providers.');
             }
 
-            console.log('[Scan] Using Hybrid OCR mode');
-            appendLog('Hybrid mode: local extraction first, AI fallback for uncertain fields');
+            console.log(`[Scan] Using Hybrid OCR mode (${usingBuiltIn ? 'built-in default: ' + effectiveProvider.model : 'personal key'})`);
+            appendLog(`Hybrid mode: local extraction first, AI fallback for uncertain fields${usingBuiltIn ? ` (fallback model: ${effectiveProvider.model}, built-in default)` : ''}`);
 
             const ocrProgressRef = { current: 0 };
-            ocrResult = await performHybridOCR(uploadedFile!, {
-              apiUrl: activeProvider.apiUrl,
-              model: activeProvider.model,
-              apiKey: activeProvider.apiKey,
-              category: activeProvider.category,
-            }, (progress: OCRProgress) => {
+            ocrResult = await performHybridOCR(uploadedFile!, effectiveProvider, (progress: OCRProgress) => {
               if (progress.message && ocrProgressRef.current !== progress.progress) {
                 appendLog(`Hybrid: ${progress.message}`);
                 ocrProgressRef.current = progress.progress;
@@ -519,17 +531,17 @@ export default function UploadScanView() {
               if (value === 'local') {
                 setOcrMode('local');
               } else if (value === 'ai') {
-                if (!aiProviderConfigured) {
+                if (!aiReady) {
                   toast.error('AI provider not configured', {
-                    description: 'Please configure an AI provider in Settings first.'
+                    description: 'Add your own key in Settings → AI Providers (or wait for the built-in default to load).'
                   });
                   return;
                 }
                 setOcrMode('ai');
               } else if (value === 'hybrid') {
-                if (!aiProviderConfigured) {
+                if (!aiReady) {
                   toast.error('AI provider not configured', {
-                    description: 'Please configure an AI provider in Settings first.'
+                    description: 'Add your own key in Settings → AI Providers (or wait for the built-in default to load).'
                   });
                   return;
                 }
@@ -548,8 +560,8 @@ export default function UploadScanView() {
                 </div>
               </div>
 
-              <div className={`flex items-start space-x-3 space-y-0 p-3 rounded-lg border transition-all ${!aiProviderConfigured ? 'opacity-50' : ''}`} style={{ borderColor: 'var(--border-default)' }}>
-                <RadioGroupItem value="ai" id="ai" disabled={!aiProviderConfigured} />
+              <div className={`flex items-start space-x-3 space-y-0 p-3 rounded-lg border transition-all ${!aiReady ? 'opacity-50' : ''}`} style={{ borderColor: 'var(--border-default)' }}>
+                <RadioGroupItem value="ai" id="ai" disabled={!aiReady} />
                 <div className="flex-1">
                   <Label htmlFor="ai" className={`font-medium ${!aiProviderConfigured ? 'cursor-not-allowed' : 'cursor-pointer'}`} style={{ color: 'var(--text-primary)' }}>
                     AI Mode
@@ -560,8 +572,8 @@ export default function UploadScanView() {
                 </div>
               </div>
 
-              <div className={`flex items-start space-x-3 space-y-0 p-3 rounded-lg border transition-all ${!aiProviderConfigured ? 'opacity-50' : ''}`} style={{ borderColor: 'var(--border-default)' }}>
-                <RadioGroupItem value="hybrid" id="hybrid" disabled={!aiProviderConfigured} />
+              <div className={`flex items-start space-x-3 space-y-0 p-3 rounded-lg border transition-all ${!aiReady ? 'opacity-50' : ''}`} style={{ borderColor: 'var(--border-default)' }}>
+                <RadioGroupItem value="hybrid" id="hybrid" disabled={!aiReady} />
                 <div className="flex-1">
                   <Label htmlFor="hybrid" className={`font-medium ${!aiProviderConfigured ? 'cursor-not-allowed' : 'cursor-pointer'}`} style={{ color: 'var(--text-primary)' }}>
                     Hybrid Mode (Recommended)
@@ -601,16 +613,25 @@ export default function UploadScanView() {
               </div>
             )}
 
-            {!aiProviderConfigured && (
+            {!aiProviderConfigured && builtIn && (
               <div className="mt-3 flex items-start gap-2 p-2 rounded-md" style={{ background: 'var(--bg-secondary)' }}>
                 <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--primary)' }} />
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  To use AI or Hybrid mode, please configure an AI provider in Settings first.
+                  Built-in default active: <strong>{builtIn.model}</strong> — AI/hybrid work without your own key. Add a personal key in Settings → AI Providers for higher limits and other models.
                 </p>
               </div>
             )}
 
-            {(ocrMode === 'ai' || ocrMode === 'hybrid') && aiProviderConfigured && (
+            {!aiProviderConfigured && !builtIn && (
+              <div className="mt-3 flex items-start gap-2 p-2 rounded-md" style={{ background: 'var(--bg-secondary)' }}>
+                <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--primary)' }} />
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  To use AI or Hybrid mode, add your own API key in Settings → AI Providers first.
+                </p>
+              </div>
+            )}
+
+            {(ocrMode === 'ai' || ocrMode === 'hybrid') && aiReady && (
               <div className="mt-3 flex items-start gap-2 p-2 rounded-md" style={{ background: 'var(--bg-secondary)' }}>
                 <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--primary)' }} />
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
@@ -632,7 +653,7 @@ export default function UploadScanView() {
                 </p>
                 <div className="rounded-[var(--radius-md)] overflow-hidden border" style={{ borderColor: 'var(--border-default)' }}>
                   <img
-                    src="/example-product-label.png"
+                    src="/example-product-label.webp"
                     alt="Example product label with manufacturer details, MRP, and compliance information"
                     className="w-full h-auto"
                   />
@@ -647,7 +668,7 @@ export default function UploadScanView() {
                 </p>
                 <div className="rounded-[var(--radius-md)] overflow-hidden border" style={{ borderColor: 'var(--border-default)' }}>
                   <img
-                    src="/example-nutrition-label.png"
+                    src="/example-nutrition-label.webp"
                     alt="Example nutrition facts table"
                     className="w-full h-auto"
                   />

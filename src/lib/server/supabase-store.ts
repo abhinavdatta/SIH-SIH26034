@@ -299,6 +299,33 @@ export async function sbDeleteResetTicket(ticketHash: string): Promise<void> {
   await rest(`/lmcc_reset_tickets?ticket_hash=eq.${encodeURIComponent(ticketHash)}`, { method: 'DELETE' });
 }
 
+/* ── App settings (key/value blob) — server-held shared configuration ──
+
+   Used for the built-in default AI provider (encrypted API key at rest).
+   Single-row-per-name JSON blobs under `lmcc_settings`, RLS deny-all,
+   service-role only — same trust boundary as accounts. */
+
+interface SettingRow {
+  name: string;
+  data: Record<string, unknown>;
+}
+
+export async function sbGetSetting(name: string): Promise<Record<string, unknown> | null> {
+  const rows = await rest<SettingRow[]>(
+    `/lmcc_settings?select=name,data&name=eq.${encodeURIComponent(name)}&limit=1`
+  );
+  return rows && rows.length > 0 ? rows[0].data : null;
+}
+
+export async function sbUpsertSetting(name: string, data: Record<string, unknown>): Promise<void> {
+  await rest('/lmcc_settings?on_conflict=name', {
+    method: 'POST',
+    // Upsert on the name key: create on first use, update on rotate.
+    headers: { Prefer: 'resolution=merge-duplicates' },
+    body: JSON.stringify({ name, data }),
+  });
+}
+
 /* ── Durable fixed-window rate limiting ──
 
    Atomicity lives in Postgres: migration 0001 defines

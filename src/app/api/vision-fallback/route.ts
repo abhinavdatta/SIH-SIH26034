@@ -6,6 +6,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import { validateOutboundApiUrl } from '@/lib/ssrf';
+import { getDefaultProvider } from '@/lib/server/default-provider';
+import { hitRateLimit } from '@/lib/server/auth-store';
 
 /* ── Types ── */
 
@@ -419,7 +421,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { image, provider, category = 'openrouter' } = body;
+    const { image, provider } = body as { image?: unknown; provider?: Record<string, unknown> };
 
     if (!image || typeof image !== 'string') {
       return NextResponse.json(
@@ -428,20 +430,51 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!provider || typeof provider !== 'object') {
-      return NextResponse.json(
-        { error: 'Missing or invalid provider configuration' },
-        { status: 400 }
-      );
-    }
+    /* ── Provider resolution: bring-your-own-key first, built-in default second ──
+       The built-in default (meta/llama-3.2-11b-vision-instruct on NVIDIA,
+       key held server-side in Supabase and AES-GCM-encrypted at rest)
+       makes AI/hybrid mode work with zero configuration. The key itself
+       never reaches the client; shared-quota use is per-IP rate limited. */
+    let apiUrl: string;
+    let model: string;
+    let apiKey: string;
+    let category: string;
+    let usedBuiltIn = false;
 
-    const { apiUrl, model, apiKey } = provider;
+    const p = provider && typeof provider === 'object' ? provider : null;
+    const pApiUrl = typeof p?.apiUrl === 'string' ? p.apiUrl : '';
+    const pModel = typeof p?.model === 'string' ? p.model : '';
+    const pKey = typeof p?.apiKey === 'string' ? p.apiKey.trim() : '';
+    const pCategory = typeof p?.category === 'string' ? p.category : 'openrouter';
 
-    if (!apiUrl || !model || !apiKey) {
-      return NextResponse.json(
-        { error: 'Incomplete provider configuration' },
-        { status: 400 }
-      );
+    if (pApiUrl && pModel && pKey) {
+      apiUrl = pApiUrl;
+      model = pModel;
+      apiKey = pKey;
+      category = pCategory;
+    } else {
+      const builtIn = await getDefaultProvider();
+      if (!builtIn) {
+        return NextResponse.json(
+          { error: 'No AI provider configured. Add your own key in Settings → AI Providers, or use Local OCR mode.' },
+          { status: 400 }
+        );
+      }
+      // Shared quota → per-IP fixed window (durable when Supabase is wired).
+      const ip = (request.headers.get('x-forwarded-for') || '').split(',')[0].trim()
+        || request.headers.get('x-real-ip')
+        || 'unknown';
+      if (await hitRateLimit(`builtin-ocr:${ip}`, 60_000, 10)) {
+        return NextResponse.json(
+          { error: 'Built-in AI provider is busy (10 scans/min per network). Wait a moment, use Local OCR mode, or add your own API key in Settings → AI Providers.' },
+          { status: 429 }
+        );
+      }
+      apiUrl = builtIn.apiUrl;
+      model = builtIn.model;
+      apiKey = builtIn.apiKey;
+      category = builtIn.category;
+      usedBuiltIn = true;
     }
 
     // SSRF guard: never let the server post to an arbitrary client-supplied URL.
@@ -731,10 +764,12 @@ export async function POST(request: NextRequest) {
     const reasoningCount = Object.keys(validated.aiReasoning || {}).length;
     console.log(`[Cloud OCR] Used provider: ${providerName} (${category}), extracted ${validated.fields.length} fields, ${reasoningCount} with reasoning${proseFallbackUsed ? ' [prose fallback — rawText only]' : ''}`);
 
-    // Add extraction method to response
+    // Add extraction method to response (usedBuiltIn: server-held shared
+    // key served this scan — shown honestly in the client console).
     const response = {
       ...validated,
       extractionMethod: 'cloud_ai' as const,
+      usedBuiltIn,
     };
 
     // Return the validated OCR result
@@ -747,6 +782,19 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/* ── GET: capability probe (no secrets) ──
+   The client checks this to decide whether AI/hybrid modes can be
+   offered before the user configures a personal key. Only the model
+   name and origin of the key are exposed — never the key. */
+export async function GET() {
+  const builtIn = await getDefaultProvider();
+  return NextResponse.json({
+    builtInProvider: builtIn
+      ? { model: builtIn.model, category: builtIn.category, source: builtIn.source }
+      : null,
+  });
 }
 
 /* ── OPTIONS Handler (for CORS) ── */

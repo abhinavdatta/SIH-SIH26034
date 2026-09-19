@@ -87,7 +87,22 @@ The application will be available at: `http://localhost:3000`
 
 ## First-Time Configuration
 
-### Configure AI Providers (Optional)
+### Built-in Default AI Provider (zero config)
+
+One model works out of the box for every signed-in user —
+**meta/llama-3.2-11b-vision-instruct** (NVIDIA). Its API key is held
+server-side (AES-256-GCM encrypted in Supabase `lmcc_settings`, or the
+`DEFAULT_AI_PROVIDER_KEY` env var locally) and never reaches browsers.
+AI and Hybrid OCR modes are therefore usable immediately; every other
+model remains bring-your-own-key. Shared-quota use is rate limited to
+10 scans/min per network.
+
+Setup (production): run `supabase/migrations/0003_default_ai_provider.sql`,
+then set `DEFAULT_AI_PROVIDER_KEY` in Vercel once — on first use the
+server encrypts the key into `lmcc_settings` and subsequently reads only
+the encrypted envelope.
+
+### Configure AI Providers (Optional — bring your own key)
 
 1. Click **AI Providers** in the sidebar
 2. Choose a provider (e.g., "Phi-3.5 Vision" for free NVIDIA)
@@ -107,10 +122,12 @@ forms also include a "Where do I find these?" help section and a
 
 ### Choose OCR Mode
 
-In the **Scan Product** view (Upload Mode):
-- **Local Only** (default): No external data sent, fully offline
-- **AI Mode**: Best accuracy, requires configured AI provider
-- **Hybrid Mode**: Balance of speed and accuracy, recommended for production
+In the **Scan Product** view (Upload Mode) **Hybrid** is the default:
+- **Hybrid Mode (default)**: local extraction first, AI fallback for
+  low-confidence fields — best balance, works immediately via the
+  built-in default model
+- **AI Mode**: best accuracy, all-AI extraction
+- **Local Only**: no external data sent, fully offline
 
 ## Build for Production
 

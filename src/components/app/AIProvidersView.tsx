@@ -6,7 +6,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Settings, Key, Globe, Check, AlertTriangle, Info, Trash2, Pencil, Plus, Loader2, Sparkles, Server, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { generateId } from '@/lib/types';
@@ -33,6 +33,49 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+
+/* ── Built-in default provider banner ──
+   Probes GET /api/vision-fallback and tells the user that one model
+   (meta/llama-3.2-11b-vision-instruct) works out of the box with a
+   server-held key. BYOK remains for every other model. */
+
+function BuiltInProviderBanner() {
+  const [builtIn, setBuiltIn] = useState<{ model: string; source: string } | null>(null);
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/vision-fallback')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { builtInProvider?: { model: string; source: string } | null } | null) => {
+        if (!alive) return;
+        setBuiltIn(d?.builtInProvider ?? null);
+        setChecked(true);
+      })
+      .catch(() => { if (alive) setChecked(true); });
+    return () => { alive = false; };
+  }, []);
+
+  if (!checked) return null;
+  if (!builtIn) return null;
+
+  return (
+    <div className="card-static p-4 flex items-start gap-3" style={{ borderColor: 'var(--primary)' }}>
+      <div className="w-9 h-9 rounded-[var(--radius-md)] flex items-center justify-center shrink-0" style={{ background: 'var(--primary-light)', color: 'var(--primary)' }}>
+        <Zap className="h-4.5 w-4.5" />
+      </div>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+          Built-in default active — {builtIn.model}
+        </p>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          AI/hybrid OCR works out of the box with a server-held key (encrypted in Supabase; rate-limited to 10 scans/min).
+          Keys below are your own — bring your own key for every other model.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 /* ── Types ── */
 
@@ -889,6 +932,8 @@ export default function AIProvidersView() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-fade-in">
+      {/* Built-in default provider banner — server-held key, zero config for users */}
+      <BuiltInProviderBanner />
       {/* Header */}
       <div className="card-static p-5 flex items-center gap-3">
         <div
