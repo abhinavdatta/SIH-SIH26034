@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Settings as SettingsIcon, Sun, Moon, Trash2, Database, Info, Shield, Send, Download, CheckCircle2, Mail, MessageSquare, User, Loader2, GraduationCap, Scale, FileText, Zap } from 'lucide-react';
+import { Settings as SettingsIcon, Sun, Moon, Trash2, Database, Info, Shield, Send, Download, CheckCircle2, Mail, MessageSquare, User, Loader2, GraduationCap, Scale, FileText, Zap, Github } from 'lucide-react';
 import { toast } from 'sonner';
 import { fireConfetti } from './easter-eggs';
 import { useTheme } from 'next-themes';
@@ -151,6 +151,9 @@ export default function SettingsView() {
   const [contactForm, setContactForm] = useState<ContactForm>({ name: '', email: '', subject: '', message: '' });
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [formSubmitting, setFormSubmitting] = useState(false);
+  /* Pre-filled GitHub issue URL from the last submit — shown as a
+     clickable fallback in case the auto-open tab gets blocked. */
+  const [issueUrl, setIssueUrl] = useState<string | null>(null);
   const [formSubmitted, setFormSubmitted] = useState(false);
 
   /* Lite-mode state; the module dispatches 'lmcc-lite-mode-changed' on change */
@@ -254,7 +257,20 @@ export default function SettingsView() {
     ].join('\n');
 
     const url = `https://github.com/abhinavdatta/SIH-SIH26034/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    setIssueUrl(url);
+
+    /* Auto-open via a temporary anchor. window.open(url, '_blank',
+       features) reads as a POPUP and gets silently killed by blockers and
+       embedded webviews; a user-gesture anchor navigation with target=
+       _blank is the most permissive path. If even that is swallowed, the
+       confirmation screen below shows a real clickable link as fallback. */
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 
     setFormSubmitted(true);
     toast.success('Opening GitHub Issues — press Submit there to send.');
@@ -532,8 +548,18 @@ export default function SettingsView() {
             <p className="text-xs mt-1 max-w-xs mx-auto" style={{ color: 'var(--text-secondary)' }}>
               Your message opens as a pre-filled issue in a new tab — press <strong>Submit new issue</strong> on GitHub to send it. Issues are public.
             </p>
+            {issueUrl && (
+              <a
+                href={issueUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-primary inline-flex items-center gap-2 mt-4"
+              >
+                <Github className="h-4 w-4" /> Open GitHub Issues
+              </a>
+            )}
             <button
-              onClick={() => { setFormSubmitted(false); setContactForm({ name: '', email: '', subject: '', message: '' }); }}
+              onClick={() => { setFormSubmitted(false); setIssueUrl(null); setContactForm({ name: '', email: '', subject: '', message: '' }); }}
               className="btn-ghost mt-4"
             >
               Send Another Message
